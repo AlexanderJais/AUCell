@@ -1,4 +1,4 @@
-"""Synthetic-data unit tests for the POA-only atlas restriction (Change 3).
+"""Synthetic-data unit tests for the POA-only atlas restriction.
 
 Fast (< 10 s), self-contained — no HypoMap atlas required.  Run with::
 

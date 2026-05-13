@@ -1,11 +1,9 @@
-"""Validate the live-atlas acceptance criteria for PRs #8 (Change 2 —
-signature refinement) and #9 (Change 3 — POA-only restriction).
+"""Validate live-atlas acceptance criteria for signature refinement (C2) and
+POA-only restriction (C3).
 
-Runs the analytics-only side of the pipeline (no Streamlit, no markers / Fisher
-/ GSEA / NNLS — none of the acceptance criteria depend on those) on a real
+Runs the analytics-only side of the pipeline (no Streamlit) on a real
 HypoMap atlas + bacTRAP DESeq2 results, and prints a PASS/FAIL line per
-criterion.  Expects to be run from the repo root on the ``feature/poa-
-restriction`` branch.
+criterion. Expects to be run from the repo root.
 
 Usage
 -----
@@ -19,16 +17,16 @@ Usage
 
 Expected wall-clock on the full atlas (385k cells): ~10–20 min.
 
-The criteria checked here come verbatim from the two PR descriptions:
+Acceptance criteria:
 
-  PR #8 (Change 2)
+  C2 — Signature refinement
     C2.1  refinement keeps 200–305 of ~340 candidate genes
     C2.2  the 8 known broadly-expressed contaminants drop under specificity
     C2.3  Pnoc survives refinement (tripwire)
     C2.4  AUCell top-25 by z_empirical excludes the 3 named Arcuate clusters
     C2.5  refinement off => no genes are dropped (input list returned)
 
-  PR #9 (Change 3, POA-only)
+  C3 — POA-only restriction
     C3.1  POA mask retains ~20 000–25 000 cells (S1: 21 784)
     C3.2  C185-67 Pnoc.Mixed.GABA-2 survives the mask (100 % NA)
     C3.3  Cre-driver baseline at Pnoc >= 0.15 retains 11–13 POA clusters
@@ -70,7 +68,7 @@ from data_loading import (
 )
 
 
-# Expected-clusters constants (from the PR descriptions)
+# Expected-clusters constants
 EIGHT_CONTAMINANTS = ["Sst", "Polr2h", "Eid2", "Pdxp", "Ppil1", "Arl6ip4", "Mrpl12", "Emc9"]
 
 THREE_ARCUATE_BAD = [
@@ -195,12 +193,12 @@ def aucell_per_cluster(
 # Acceptance-criteria checks
 # ---------------------------------------------------------------------------
 
-def check_change2(
+def check_c2_signature_refinement(
     adata, bactrap_matched, gene_to_idx, matched_in_raw, annotation_col,
     *, n_control_sets, top_n=50,
 ):
     results = []
-    print("\n=== PR #8 / Change 2 — signature refinement ===")
+    print("\n=== C2 — signature refinement ===")
 
     gene_indices = [gene_to_idx[g] for g in bactrap_matched["_hypomap_gene_name"]
                     if g in gene_to_idx]
@@ -297,13 +295,13 @@ def check_change2(
     return results, per_cluster, sig_refined
 
 
-def check_change3(
+def check_c3_poa_restriction(
     adata, bactrap_matched, gene_to_idx, matched_in_raw, annotation_col,
     sig_full_atlas_refined, full_per_cluster,
     *, n_control_sets, baseline_cutoff, top_n=50,
 ):
     results = []
-    print("\n=== PR #9 / Change 3 — POA-only restriction ===")
+    print("\n=== C3 — POA-only restriction ===")
 
     # Build POA mask + view
     print("  building POA mask...")
@@ -465,7 +463,7 @@ def main():
     if args.annotation_col not in adata.obs.columns:
         raise SystemExit(f"Annotation column '{args.annotation_col}' not found.")
     if "Region_summarized" not in adata.obs.columns:
-        print("WARNING: 'Region_summarized' not in adata.obs — Change 3 checks will fail. "
+        print("WARNING: 'Region_summarized' not in adata.obs — C3 checks will fail. "
               "Use --annotation-col, or report the actual region column name.")
 
     print(f"Loading bacTRAP from {args.bactrap}")
@@ -479,13 +477,13 @@ def main():
     print(f"  matched {len(matched_gene_names):,} genes (in_raw={matched_in_raw})")
 
     all_results = []
-    c2_results, full_per_cluster, sig_full_refined = check_change2(
+    c2_results, full_per_cluster, sig_full_refined = check_c2_signature_refinement(
         adata, bactrap_matched, gene_to_idx, matched_in_raw, args.annotation_col,
         n_control_sets=args.n_control_sets,
     )
     all_results.extend(c2_results)
 
-    c3_results = check_change3(
+    c3_results = check_c3_poa_restriction(
         adata, bactrap_matched, gene_to_idx, matched_in_raw, args.annotation_col,
         sig_full_refined, full_per_cluster,
         n_control_sets=args.n_control_sets,

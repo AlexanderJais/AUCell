@@ -1,4 +1,4 @@
-"""Synthetic-data unit tests for the signature-refinement filters (Change 2).
+"""Synthetic-data unit tests for the signature-refinement filters.
 
 Fast (< 5 s), self-contained — no HypoMap atlas required.  Run with::
 

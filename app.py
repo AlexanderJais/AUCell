@@ -148,20 +148,8 @@ aucell_top_fraction = st.sidebar.slider(
         "more conservative call on bacTRAP-target identity."
     ),
 )
-n_markers_per_cluster = st.sidebar.slider(
-    "Marker genes per cluster", 20, 500, 100, 10,
-    help=(
-        "Number of top marker genes retrieved per HypoMap cluster (Wilcoxon "
-        "or t-test ranking via `scanpy.tl.rank_genes_groups`). These marker "
-        "sets feed Fisher's exact overlap test (Suppl. S5) and preranked "
-        "GSEA (Suppl. S9/S10). 100 is a common default; smaller sets "
-        "emphasise the very top markers per cluster, larger sets give "
-        "Fisher's test more statistical power at the cost of specificity. "
-        "Does not affect AUCell."
-    ),
-)
 min_cells_per_cluster = st.sidebar.slider(
-    "Min cells per cluster (markers)", 1, 100, 10, 1,
+    "Min cells per cluster", 1, 100, 10, 1,
     help=(
         "Minimum cell count required for a cluster to enter the per-cluster "
         "mean-expression and per-gene detection-rate computations that drive "
@@ -173,32 +161,17 @@ min_cells_for_rank = st.sidebar.slider(
     "Min cells for AUCell top-N ranking", 1, 200, 20, 1,
     help=(
         "Clusters with fewer than this many cells are excluded from the "
-        "top-ranked set shown in main figures 1b/1c and supplementary S2. "
-        "Mean AUCell for very small clusters is dominated by shrinkage "
-        "variance, so a "
+        "top-ranked set shown in figures 1b/1c and Suppl. S2. Mean AUCell "
+        "for very small clusters is dominated by shrinkage variance, so a "
         "2-cell cluster with a slightly above-average mean can otherwise "
-        "claim a top slot purely by chance (fix #4 from the critical "
-        "evaluation). Raw per-cluster CSV is unaffected and still contains "
-        "every cluster."
+        "claim a top slot purely by chance. Raw per-cluster CSV is "
+        "unaffected and still contains every cluster."
     ),
 )
-_marker_method_label = st.sidebar.selectbox(
-    "Marker test",
-    ["Wilcoxon (robust, slower)", "t-test overestim_var (faster)"],
-    index=0,
-    help=(
-        "Wilcoxon is non-parametric and recommended for publication-grade "
-        "p-values, but takes ~15 min on HypoMap-scale data. t-test "
-        "overestim_var produces a comparable ranking in a fraction of the "
-        "time — fine when downstream steps use the ranking, not the "
-        "nominal p-values."
-    ),
-)
-marker_method = "wilcoxon" if _marker_method_label.startswith("Wilcoxon") else "t-test_overestim_var"
 umap_subsample = st.sidebar.slider(
     "UMAP subsample (cells)", 10000, 200000, 50000, 5000,
     help=(
-        "How many cells to render in the UMAP panels (Figures 1a/1b, "
+        "How many cells to render in the UMAP panels (Figures 1a/1b and "
         "Suppl. S4). Subsampling only affects rendering speed and PDF "
         "file size — all cells are used for AUCell scoring and every "
         "statistical test. 50 k is a readable balance for HypoMap's "
@@ -206,18 +179,7 @@ umap_subsample = st.sidebar.slider(
         "100 k if you need rare clusters to survive the random sample."
     ),
 )
-hide_unassigned = st.sidebar.checkbox(
-    "Hide Unassigned / Mixed clusters in rankings",
-    value=False,
-    help=(
-        "Filter clusters whose label contains 'Unassigned' or 'Mixed' from "
-        "ranking tables and selection lists.  Useful because HypoMap's "
-        "uncurated mixed clusters can artificially top GSEA and other "
-        "rankings due to heterogeneous membership.  Underlying computations "
-        "still include all clusters; only the displayed rankings are filtered."
-    ),
-)
-# ---- Atlas restriction (Change 3): optionally restrict the whole pipeline
+# ---- Atlas restriction: optionally restrict the whole pipeline
 # to POA cells (S1-aligned). Off by default — reproduces full-atlas behaviour.
 with st.sidebar.expander("Atlas restriction", expanded=False):
     poa_only = st.checkbox(
@@ -257,7 +219,7 @@ with st.sidebar.expander("Atlas restriction", expanded=False):
 poa_keywords = tuple(s.strip().lower() for s in str(poa_keywords_input).split(",") if s.strip()) or ("preoptic",)
 poa_min_cells = int(poa_min_cells)
 
-# ---- Signature refinement (Change 2): drop signature genes that are
+# ---- Signature refinement: drop signature genes that are
 # undetectable in HypoMap or too broadly expressed to be cell-type-specific.
 with st.sidebar.expander("Signature refinement", expanded=False):
     sig_filter_detectability = st.checkbox(
@@ -296,7 +258,7 @@ with st.sidebar.expander("Signature refinement", expanded=False):
         help="Drop the gene if more than this fraction of clusters exceed the threshold above.",
     )
 
-# ---- Empirical-null AUCell (Change 1): score expression-matched random
+# ---- Empirical-null AUCell: score expression-matched random
 # control gene sets and report per-cluster z-score / empirical p-value.
 with st.sidebar.expander("Empirical null", expanded=False):
     empirical_null_enabled = st.checkbox(
@@ -458,16 +420,13 @@ from data_loading import (
     load_bactrap,
     get_annotation_columns,
     match_genes,
-    compute_cell_detection_rate,
     get_atlas_cluster_mean_expr,
     get_atlas_gene_detection_rate,
     compute_single_gene_cluster_stats,
     get_poa_cell_mask,
     build_mask_signature,
-    get_gene_names_from_adata,
     _detect_gene_column,
     _build_adata_gene_lookup,
-    _looks_like_ensembl,
 )
 from analysis import (
     get_enriched_genes,
@@ -552,7 +511,7 @@ annotation_col = st.sidebar.selectbox(
     ),
 )
 
-# ---- POA-only atlas restriction (Change 3) ----
+# ---- POA-only atlas restriction ----
 # When active, every cluster-level AND per-cell computation runs against a
 # POA-cell subset (adata_view), built once per (atlas file, mask signature)
 # and cached in session state. When off, adata_view IS adata (full atlas).
@@ -599,7 +558,7 @@ else:
     adata_view = adata
 poa_active = poa_mask is not None
 # Effective per-cluster cell-count floors (POA cells when the restriction is on)
-_eff_min_cells_markers = max(min_cells_per_cluster, poa_min_cells) if poa_active else min_cells_per_cluster
+_eff_min_cells_cluster = max(min_cells_per_cluster, poa_min_cells) if poa_active else min_cells_per_cluster
 _eff_min_cells_rank = max(min_cells_for_rank, poa_min_cells) if poa_active else min_cells_for_rank
 
 # Gene column selection for bacTRAP data
@@ -689,14 +648,14 @@ _analysis_params = (
     _gene_col_for_matching, annotation_col,
     padj_cutoff, log2fc_cutoff, min_ip_expression, ranking_metric,
     top_n_genes, aucell_top_fraction,
-    n_markers_per_cluster, min_cells_per_cluster, marker_method,
+    min_cells_per_cluster,
     umap_subsample,
-    # Change 3 — POA-only atlas restriction
+    # POA-only atlas restriction
     bool(poa_active), mask_signature, int(poa_min_cells),
-    # Change 2 — signature refinement
+    # Signature refinement
     sig_filter_detectability, sig_min_detection_rate, sig_min_max_cluster_mean,
     sig_filter_specificity, sig_specificity_thresh, sig_specificity_max_fraction,
-    # Change 1 — empirical-null AUCell
+    # Empirical-null AUCell
     bool(empirical_null_enabled), int(empirical_null_n), int(empirical_null_bins),
     int(empirical_null_seed),
 )
@@ -721,12 +680,9 @@ if run_button or st.session_state.analysis_done:
         logger.info("  ranking metric: %s", ranking_metric)
         logger.info("  top N genes: %d", top_n_genes)
         logger.info("  AUCell top fraction: %.2f", aucell_top_fraction)
-        logger.info("  marker genes per cluster: %d", n_markers_per_cluster)
-        logger.info("  min cells per cluster (markers): %d", min_cells_per_cluster)
+        logger.info("  min cells per cluster: %d", min_cells_per_cluster)
         logger.info("  min cells for AUCell top-N ranking: %d", min_cells_for_rank)
-        logger.info("  marker method: %s", marker_method)
         logger.info("  UMAP subsample: %d", umap_subsample)
-        logger.info("  hide Unassigned/Mixed: %s", hide_unassigned)
         if poa_active:
             logger.info("  POA restriction: ON — keywords=%s, include_na=%s, mask_signature='%s', "
                         "min_poa_cells=%d, N_poa=%d/%d cells",
@@ -783,14 +739,14 @@ if run_button or st.session_state.analysis_done:
         # heuristic samples only the selected genes and can falsely decide
         # the data is already normalized — see the second call below).
         gene_indices = [gene_to_idx[g] for g in matched_genes]
-        # adata_view == adata unless the POA-only restriction (Change 3) is
+        # adata_view == adata unless the POA-only restriction is
         # active, in which case it's the POA-cell subset and the WHOLE pipeline
         # (per-cell scoring, UMAP, every cluster statistic) runs against it.
         # Cached on adata_view.uns (keyed by cluster column + mask signature) so
         # cutoff tweaks don't recompute the matched-gene cluster-mean matrix.
         cluster_mean_expr = get_atlas_cluster_mean_expr(
             adata_view, gene_indices, annotation_col,
-            mask_signature=mask_signature, min_cells=_eff_min_cells_markers,
+            mask_signature=mask_signature, min_cells=_eff_min_cells_cluster,
             indices_in_raw=matched_in_raw, normalize=True,
         )
         progress.progress(25, text="Cluster means computed. Identifying enriched genes...")
@@ -804,7 +760,7 @@ if run_button or st.session_state.analysis_done:
             min_ip_expression=min_ip_expression, ip_col="IP",
         )
 
-        # ---- Signature refinement (Change 2) ----
+        # ---- Signature refinement ----
         # Drop candidate signature genes that are undetectable in HypoMap or
         # too broadly expressed to be cell-type-specific, BEFORE π-score
         # ranking / top-N selection, so the filtered list flows into AUCell
@@ -854,8 +810,6 @@ if run_button or st.session_state.analysis_done:
             sig_drop_log if signature_refinement_active else None
         )
 
-        enriched_genes_list = enriched_df["_hypomap_gene_name"].tolist()
-
         # Rank enriched genes by the user-chosen metric (default π-score,
         # which balances effect size with statistical significance so
         # low-count / zero-Input pseudocount artefacts don't dominate).
@@ -879,7 +833,7 @@ if run_button or st.session_state.analysis_done:
 
         # ---- AUCell scoring ----
         # Use the empirical-null seed so the signature scoring shares the
-        # tie-breaking regime with the control sets (Change 1); with the
+        # tie-breaking regime with the empirical-null controls; with the
         # default seed=0 this is identical to the previous behaviour.
         # adata_view is the POA subset when the restriction is on, the full
         # atlas otherwise — so per-cell scoring and Fig 1a follow the mode.
@@ -922,7 +876,7 @@ if run_button or st.session_state.analysis_done:
         progress.progress(83, text="Computing per-cluster enrichment significance...")
 
         # ---- AUCell result tables (raw data underlying figures 1a–1c + S2/S3) ----
-        # adata_view is the whole atlas (or the POA subset, Change 3), so the
+        # adata_view is the whole atlas (or the POA subset), so the
         # per-cell scores, the per-cell CSV, Fig 1a and the cluster aggregation
         # are all over the same cell set.
         _cell_labels_arr = adata_view.obs[annotation_col].values.astype(str)
@@ -969,7 +923,7 @@ if run_button or st.session_state.analysis_done:
                 on="cluster", how="left",
             )
 
-        # ---- Empirical-null AUCell (Change 1) ----
+        # ---- Empirical-null AUCell ----
         # Score N expression-matched random control gene sets and report a
         # per-cluster z-score / empirical p-value against the control
         # distribution. Adds columns to aucell_per_cluster.csv.
@@ -1040,12 +994,7 @@ if run_button or st.session_state.analysis_done:
             "params": _analysis_params,
             "bactrap_matched": bactrap_matched,
             "matched_genes": matched_genes,
-            "gene_to_idx": gene_to_idx,
-            "matched_in_raw": matched_in_raw,
-            "gene_indices": gene_indices,
-            "cluster_mean_expr": cluster_mean_expr,
             "enriched_df": enriched_df,
-            "enriched_genes_list": enriched_genes_list,
             "sig_drop_log": sig_drop_log,
             "n_enriched_prefilter": n_enriched_prefilter,
             "signature_refinement_active": signature_refinement_active,
@@ -1066,12 +1015,7 @@ if run_button or st.session_state.analysis_done:
         _c = _cached
         bactrap_matched = _c["bactrap_matched"]
         matched_genes = _c["matched_genes"]
-        gene_to_idx = _c["gene_to_idx"]
-        matched_in_raw = _c["matched_in_raw"]
-        gene_indices = _c["gene_indices"]
-        cluster_mean_expr = _c["cluster_mean_expr"]
         enriched_df = _c["enriched_df"]
-        enriched_genes_list = _c["enriched_genes_list"]
         sig_drop_log = _c.get("sig_drop_log", pd.DataFrame())
         n_enriched_prefilter = _c.get("n_enriched_prefilter", len(enriched_df))
         signature_refinement_active = bool(_c.get("signature_refinement_active", False))
@@ -1099,7 +1043,7 @@ if run_button or st.session_state.analysis_done:
     # never drops an AUCell-eligible cluster just because it fell below
     # sanity's own size gate (user raising min_cells_per_cluster above
     # min_cells_for_rank would otherwise silently tighten AUCell too).
-    _sanity_min_cells = min(_eff_min_cells_markers, _eff_min_cells_rank)
+    _sanity_min_cells = min(_eff_min_cells_cluster, _eff_min_cells_rank)
     sanity_cache_key = (
         hypomap_file.strip(), annotation_col,
         _sanity_min_cells, sanity_gene.strip().lower(),
@@ -1392,7 +1336,7 @@ if run_button or st.session_state.analysis_done:
         else:
             st.warning("No genes pass the current enrichment thresholds.")
 
-        # ---- Signature refinement diagnostics (Change 2) ----
+        # ---- Signature refinement diagnostics ----
         # Only rendered when at least one refinement filter actually ran.
         if signature_refinement_active and isinstance(sig_drop_log, pd.DataFrame) and len(sig_drop_log):
             with st.expander("Signature refinement diagnostics", expanded=False):
@@ -1465,7 +1409,7 @@ if run_button or st.session_state.analysis_done:
                          "max_cluster_mean, frac_clusters_above_thresh, reason.",
                 )
 
-        # ---- POA restriction diagnostics (Change 3) ----
+        # ---- POA restriction diagnostics ----
         if poa_active:
             with st.expander("POA restriction diagnostics", expanded=False):
                 _n_poa = int(poa_mask.sum())
@@ -1846,7 +1790,7 @@ if run_button or st.session_state.analysis_done:
             )
         plt.close(fig_1c)
 
-        # ---- Empirical-null companion violins (Change 1) ----
+        # ---- Empirical-null companion violins ----
         if _empirical_null_active and "z_empirical" in aucell_per_cluster_df.columns:
             _n_used = int(empirical_null_df["n_control_sets_used"].iloc[0])
             st.subheader("Figure 1c (companion): Top-15 by empirical z-score")
@@ -2140,7 +2084,7 @@ if run_button or st.session_state.analysis_done:
             f"genes (padj < {padj_cutoff}, log₂FC > {log2fc_cutoff})."
         )
 
-        st.subheader("Supplementary Figure S2: UMAP AUCell Map")
+        st.subheader("Supplementary Figure S4: UMAP AUCell Map")
         _top15_aucell_clusters = (
             aucell_per_cluster_df[
                 aucell_per_cluster_df["n_cells"] >= min_cells_for_rank
@@ -2160,22 +2104,22 @@ if run_button or st.session_state.analysis_done:
             highlight_clusters=_top15_aucell_clusters,
         )
         st.pyplot(fig_b)
-        _cache_fig("fig_s2_umap_enrichment", fig_b)
+        _cache_fig("fig_s4_umap_enrichment", fig_b)
 
         col_pdf, col_svg = st.columns(2)
         with col_pdf:
             st.download_button(
                 "Download PDF",
-                st.session_state.fig_bytes["fig_s2_umap_enrichment"]["pdf"],
-                "fig_s2_umap.pdf", "application/pdf",
-                key="dl_fig_s2_pdf",
+                st.session_state.fig_bytes["fig_s4_umap_enrichment"]["pdf"],
+                "fig_s4_umap.pdf", "application/pdf",
+                key="dl_fig_s4_pdf",
             )
         with col_svg:
             st.download_button(
                 "Download SVG",
-                st.session_state.fig_bytes["fig_s2_umap_enrichment"]["svg"],
-                "fig_s2_umap.svg", "image/svg+xml",
-                key="dl_fig_s2_svg",
+                st.session_state.fig_bytes["fig_s4_umap_enrichment"]["svg"],
+                "fig_s4_umap.svg", "image/svg+xml",
+                key="dl_fig_s4_svg",
             )
         plt.close(fig_b)
 

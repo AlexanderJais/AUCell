@@ -8,23 +8,17 @@ enrichment statistics.
 """
 
 import logging
-import warnings
 
 import numpy as np
 import pandas as pd
 import scanpy as sc
 from scipy import stats, sparse
 from statsmodels.stats.multitest import multipletests
-from typing import Tuple, List, Dict, Iterable, Optional
+from typing import Tuple, List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-from data_loading import (
-    get_gene_names_from_adata,
-    _build_adata_gene_lookup,
-    _looks_like_ensembl,
-    _find_symbol_column,
-)
+from data_loading import _build_adata_gene_lookup
 
 
 def get_enriched_genes(
