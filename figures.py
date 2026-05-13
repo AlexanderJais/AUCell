@@ -560,8 +560,6 @@ def figure_celltype_umap(
     for spine in ax.spines.values():
         spine.set_visible(False)
 
-    _add_umap_axis_arrows(ax)
-
     handles = [
         plt.Line2D([0], [0], marker="o", color="w",
                    markerfacecolor=color_map[cl], markersize=3.5, label=cl)
@@ -720,8 +718,8 @@ def figure_aucell_violins(
         [df_top.loc[df_top["cluster"] == c, "score"].values for c in top_clusters],
         positions=range(len(top_clusters)),
         vert=False,
-        showmeans=True,
-        showmedians=True,
+        showmeans=False,
+        showmedians=False,
         showextrema=False,
     )
 
@@ -733,13 +731,6 @@ def figure_aucell_violins(
         body.set_alpha(0.7)
         body.set_edgecolor("grey")
         body.set_linewidth(0.5)
-    if "cmeans" in parts:
-        parts["cmeans"].set_linewidth(0.8)
-        parts["cmeans"].set_color("black")
-    if "cmedians" in parts:
-        parts["cmedians"].set_linewidth(0.5)
-        parts["cmedians"].set_color("grey")
-        parts["cmedians"].set_linestyle("--")
 
     ax.set_yticks(range(len(top_clusters)))
     ax.set_yticklabels(top_clusters, fontsize=6)
@@ -749,17 +740,6 @@ def figure_aucell_violins(
     # Highest-mean cluster at the top of the plot (top_clusters[0]) rather
     # than at y=0 which matplotlib renders at the bottom.
     ax.invert_yaxis()
-
-    # Explicit legend for mean/median — without it the two vertical ticks
-    # inside each horizontal violin read as an ambiguous "I"-shape.
-    legend_handles = [
-        plt.Line2D([0], [0], color="black", linewidth=0.8, label="mean"),
-        plt.Line2D([0], [0], color="grey", linewidth=0.5, linestyle="--", label="median"),
-    ]
-    ax.legend(
-        handles=legend_handles, loc="lower right", fontsize=5,
-        frameon=False, handlelength=1.5, handletextpad=0.4,
-    )
 
     logger.info("figure_aucell_violins: %d clusters shown", len(top_clusters))
 
@@ -812,7 +792,7 @@ def figure_aucell_zscore_violins(
     parts = ax.violinplot(
         [df_top.loc[df_top["cluster"] == c, "score"].values for c in top_clusters],
         positions=range(len(top_clusters)),
-        vert=False, showmeans=True, showmedians=False, showextrema=False,
+        vert=False, showmeans=False, showmedians=False, showextrema=False,
     )
     cmap = plt.colormaps["viridis"]
     zvals = z.loc[top_clusters].to_numpy()
@@ -826,16 +806,6 @@ def figure_aucell_zscore_violins(
         body.set_alpha(0.7)
         body.set_edgecolor("grey")
         body.set_linewidth(0.5)
-    if "cmeans" in parts:
-        parts["cmeans"].set_linewidth(0.8)
-        parts["cmeans"].set_color("black")
-
-    # Annotate each violin with its z-score
-    for i, c in enumerate(top_clusters):
-        ax.text(
-            df_top.loc[df_top["cluster"] == c, "score"].max(), i,
-            f"  z={zvals[i]:.1f}", va="center", ha="left", fontsize=5,
-        )
 
     ax.set_yticks(range(len(top_clusters)))
     ax.set_yticklabels(top_clusters, fontsize=6)
