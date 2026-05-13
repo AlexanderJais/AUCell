@@ -19,6 +19,8 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+from matplotlib import cm
 import seaborn as sns
 from adjustText import adjust_text
 from typing import Optional, List, Dict, Iterable
@@ -902,7 +904,7 @@ def figure_aucell_histogram(
 
 
 # ---------------------------------------------------------------------------
-# Main Figure 1e: Composite Consensus Ranking Heatmap
+# Cre-driver / marker-gene diagnostic
 # ---------------------------------------------------------------------------
 
 def figure_marker_gene_diagnostic(
