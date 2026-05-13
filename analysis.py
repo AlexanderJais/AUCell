@@ -18,7 +18,7 @@ from typing import Tuple, List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-from data_loading import _build_adata_gene_lookup
+from data_loading import _build_adata_gene_lookup, lookup_gene_in_atlas
 
 
 def get_enriched_genes(
@@ -397,9 +397,9 @@ def compute_aucell_scores(
     query_idx: List[int] = []
     unmatched: List[str] = []
     for g in gene_names:
-        g_lower = str(g).strip().lower()
-        if g_lower in lookup:
-            query_idx.append(lookup[g_lower][1])
+        hit = lookup_gene_in_atlas(lookup, g)
+        if hit is not None:
+            query_idx.append(hit[1])
         else:
             unmatched.append(str(g))
 
@@ -477,39 +477,43 @@ def compute_aucell_scores(
     # Determine a safe jitter scale: must be smaller than the smallest gap
     # between distinct expression values, otherwise jitter could reorder
     # genuinely distinct values. For raw integer counts the smallest gap is 1
-    # (so jitter < 0.5 is safe). For non-integer (e.g. log-normalised) data
-    # we fall back on a sample-based estimate of half the smallest nonzero
-    # value, which is a conservative proxy for the smallest distinct gap.
-    sample_n = min(500, n_cells)
-    sample_pick = (
-        sampling_rng.choice(n_cells, sample_n, replace=False)
-        if n_cells > sample_n else np.arange(n_cells)
-    )
-    sample_X = X[sample_pick, :]
-    if sparse.issparse(sample_X):
-        sample_X = np.asarray(sample_X.toarray())
+    # (so jitter < 0.5 is safe). For non-integer (e.g. log-normalised) data we
+    # use HALF the smallest *stored* nonzero value, computed over the full
+    # nnz array (O(nnz) single pass) — sampling 500 cells gave an unstable
+    # estimate that varied across atlases and POA restrictions.
+    if sparse.issparse(X):
+        nz_data = X.data
+        global_max = float(nz_data.max()) if nz_data.size else 0.0
+        global_min_nz = float(nz_data.min()) if nz_data.size else 0.0
+        is_integer = (
+            nz_data.size > 0 and bool(np.all(nz_data == np.round(nz_data)))
+        )
     else:
-        sample_X = np.asarray(sample_X)
-    sample_max = float(sample_X.max()) if sample_X.size else 0.0
-    sample_is_integer = (
-        sample_X.size > 0 and bool(np.all(sample_X == np.round(sample_X)))
-    )
-    if sample_is_integer and sample_max > 5:
+        X_dense = np.asarray(X)
+        global_max = float(X_dense.max()) if X_dense.size else 0.0
+        nz_vals = X_dense[X_dense > 0]
+        global_min_nz = float(nz_vals.min()) if nz_vals.size else 0.0
+        is_integer = (
+            X_dense.size > 0 and bool(np.all(X_dense == np.round(X_dense)))
+        )
+    if is_integer and global_max > 5:
         jitter_scale = np.float32(0.49)
         logger.info("  input looks like raw integer counts; jitter_scale=0.49")
     else:
-        nonzero_vals = sample_X[sample_X > 0]
-        if nonzero_vals.size > 0:
-            jitter_scale = np.float32(0.49 * float(nonzero_vals.min()))
+        if global_min_nz > 0:
+            jitter_scale = np.float32(0.49 * global_min_nz)
         else:
             jitter_scale = np.float32(1e-6)
         logger.warning(
             "  input does not look like raw integer counts (max=%.2f, integer=%s); "
-            "using scaled jitter (%.2e). AUCell is designed for raw counts "
-            "(Aibar et al. 2017) — set use_raw=True against an integer-count layer "
-            "for the cleanest behaviour.",
-            sample_max, sample_is_integer, float(jitter_scale),
+            "using scaled jitter (%.2e, ½ of smallest stored nonzero value). "
+            "AUCell is designed for raw counts (Aibar et al. 2017) — set "
+            "use_raw=True against an integer-count layer for the cleanest behaviour.",
+            global_max, is_integer, float(jitter_scale),
         )
+    # sampling_rng is no longer used for jitter-scale derivation, but the
+    # split keeps `jitter_rng` decoupled from any future use of `sampling_rng`.
+    del sampling_rng
 
     # Process in cell chunks — vectorized within each chunk
     chunk_size = 5000
@@ -535,21 +539,20 @@ def compute_aucell_scores(
             (chunk_n, n_total_genes), dtype=np.float32,
         ) * jitter_scale
 
-        # For each cell, get top-n gene indices via argpartition (O(n) per cell)
-        # Then check which are query genes and compute cumulative AUC
+        # For each cell, get top-n gene indices via argpartition (O(n) per cell).
+        # Then sort the top-n by jittered expression descending — fully
+        # vectorised across cells — and reduce to AUC.
         top_idx = np.argpartition(X_chunk, -n_top, axis=1)[:, -n_top:]
-
-        for i in range(chunk_n):
-            cell_top = top_idx[i]
-            # Sort by jittered expression descending
-            order = np.argsort(X_chunk[i, cell_top])[::-1]
-            sorted_top = cell_top[order]
-
-            # Vectorized: check query membership and cumsum for AUC
-            is_hit = query_mask[sorted_top]
-            cumhits = np.cumsum(is_hit)
-            auc = cumhits.sum()
-            scores[start + i] = auc / max_auc if max_auc > 0 else 0.0
+        # Gather the jittered top-n values per cell, then argsort descending.
+        top_vals = np.take_along_axis(X_chunk, top_idx, axis=1)
+        order = np.argsort(-top_vals, axis=1)
+        sorted_top = np.take_along_axis(top_idx, order, axis=1)
+        is_hit = query_mask[sorted_top]  # (chunk_n, n_top) bool
+        cumhits = np.cumsum(is_hit, axis=1)
+        chunk_auc = cumhits.sum(axis=1)
+        if max_auc > 0:
+            scores[start:end] = chunk_auc / max_auc
+        # else: scores already zero-initialised
 
     logger.info("  AUCell scores: mean=%.4f, std=%.4f, min=%.4f, max=%.4f",
                 float(scores.mean()), float(scores.std()), float(scores.min()), float(scores.max()))
@@ -613,16 +616,26 @@ def compute_aucell_scores_multi(
     for s, names in enumerate(gene_name_lists):
         idxs = []
         for g in names:
-            key = str(g).strip().lower()
-            if key in lookup:
-                idxs.append(lookup[key][1])
+            hit = lookup_gene_in_atlas(lookup, g)
+            if hit is not None:
+                idxs.append(hit[1])
         arr = np.array(sorted(set(idxs)), dtype=np.int64)
         query_idx_per_sig.append(arr)
         n_query_per_sig[s] = arr.size
 
     max_nq = int(n_query_per_sig.max()) if n_sigs else 0
-    n_top = max(int(n_genes * top_fraction), max(max_nq, 1))
+    n_top_requested = max(int(n_genes * top_fraction), 1)
+    n_top = max(n_top_requested, max(max_nq, 1))
     n_top = min(n_top, n_genes)
+    if n_top > n_top_requested:
+        logger.warning(
+            "compute_aucell_scores_multi: bumping shared n_top from %d "
+            "(%.2f%% of %d genes) to %d so it covers the largest signature "
+            "(%d genes). This widens the ranking window for every signature; "
+            "if you didn't intend this, reduce signature size or raise the "
+            "top_fraction slider.",
+            n_top_requested, 100 * top_fraction, n_genes, n_top, max_nq,
+        )
 
     # query_masks[s, g] = 1.0 iff gene g ∈ signature s
     query_masks = np.zeros((n_sigs, n_genes), dtype=np.float32)
@@ -708,7 +721,13 @@ def _atlas_gene_mean_logexpr(adata, use_raw: bool = True, *, cache_suffix: str =
     atlas load (the ``cache_suffix`` distinguishes e.g. a POA-restricted view);
     the sparse column sums are cheap (no dense materialisation).
     """
-    cache_key = f"gene_mean_expr_{cache_suffix}" if cache_suffix else "gene_mean_expr"
+    # Include `use_raw` in the cache key so callers that pass different layer
+    # choices never collide on the same suffix.
+    layer_tag = "raw" if (use_raw and adata.raw is not None) else "X"
+    cache_key = (
+        f"gene_mean_expr_{layer_tag}_{cache_suffix}" if cache_suffix
+        else f"gene_mean_expr_{layer_tag}"
+    )
     if use_raw and adata.raw is not None:
         X = adata.raw.X
     else:
@@ -800,33 +819,6 @@ def compute_empirical_null_aucell(
     log = logger or globals()["logger"]
     rng = np.random.default_rng(int(seed))
 
-    # ---- Per-cell signature AUCell (scored once, here, so signature and
-    # controls share the exact same scorer / jitter regime) ----
-    sig_scores = np.asarray(
-        compute_aucell_fn(adata, list(signature_genes),
-                          top_fraction=top_fraction, seed=int(seed)),
-        dtype=np.float64,
-    )
-    labels = pd.Series(np.asarray(cluster_labels).astype(str))
-    if len(labels) != len(sig_scores):
-        raise ValueError(
-            f"cluster_labels ({len(labels)}) and AUCell scores ({len(sig_scores)}) "
-            f"length mismatch"
-        )
-    cluster_sizes = labels.value_counts()
-    eligible_clusters = cluster_sizes[cluster_sizes >= min_cluster_size].index.tolist()
-    if not eligible_clusters:
-        log.warning("compute_empirical_null_aucell: no cluster >= %d cells", min_cluster_size)
-        return pd.DataFrame(columns=[
-            "null_mean", "null_sd", "z_empirical", "pvalue_empirical",
-            "qvalue_empirical", "n_control_sets_used",
-        ])
-
-    def _per_cluster_means(scores: np.ndarray) -> pd.Series:
-        return pd.Series(scores).groupby(labels.values).mean().reindex(eligible_clusters)
-
-    sig_means = _per_cluster_means(sig_scores)
-
     # ---- Expression-matched control gene sets ----
     # When an atlas restriction (e.g. POA-only) is active, `adata` here is the
     # restricted view, so gene means / quantile bins are recomputed on the
@@ -839,12 +831,10 @@ def compute_empirical_null_aucell(
     adata.uns[_bins_key] = gene_bins
 
     sig_idx: List[int] = []
-    matched_genes: List[str] = []
     for g in signature_genes:
-        key = str(g).strip().lower()
-        if key in lookup:
-            sig_idx.append(lookup[key][1])
-            matched_genes.append(str(g))
+        hit = lookup_gene_in_atlas(lookup, g)
+        if hit is not None:
+            sig_idx.append(hit[1])
     sig_idx = list(dict.fromkeys(sig_idx))  # de-dup, preserve order
     sig_idx_set = set(sig_idx)
 
@@ -877,8 +867,8 @@ def compute_empirical_null_aucell(
     if k_dropped:
         log.warning(
             "  %d signature gene(s) have no in-bin control candidates and were "
-            "excluded from control matching (signature scoring still uses all "
-            "matched genes): %s",
+            "excluded from control matching AND signature scoring so the null "
+            "and signature share the same gene-set size: %s",
             k_dropped, [gene_names[i] for i in dropped_idx][:20],
         )
     if k_matched == 0:
@@ -888,13 +878,53 @@ def compute_empirical_null_aucell(
             "qvalue_empirical", "n_control_sets_used",
         ])
 
+    # ---- Per-cell signature AUCell (scored on the *matchable* subset so the
+    # signature and the controls share the same gene-set size — otherwise
+    # k_dropped signature genes would inflate the test statistic relative to
+    # the null purely by gene-count). ----
+    matchable_gene_names = [str(gene_names[i]) for i in matchable_idx]
+    sig_scores = np.asarray(
+        compute_aucell_fn(adata, matchable_gene_names,
+                          top_fraction=top_fraction, seed=int(seed)),
+        dtype=np.float64,
+    )
+    labels = pd.Series(np.asarray(cluster_labels).astype(str))
+    if len(labels) != len(sig_scores):
+        raise ValueError(
+            f"cluster_labels ({len(labels)}) and AUCell scores ({len(sig_scores)}) "
+            f"length mismatch"
+        )
+    cluster_sizes = labels.value_counts()
+    eligible_clusters = cluster_sizes[cluster_sizes >= min_cluster_size].index.tolist()
+    if not eligible_clusters:
+        log.warning("compute_empirical_null_aucell: no cluster >= %d cells", min_cluster_size)
+        return pd.DataFrame(columns=[
+            "null_mean", "null_sd", "z_empirical", "pvalue_empirical",
+            "qvalue_empirical", "n_control_sets_used",
+        ])
+
+    def _per_cluster_means(scores: np.ndarray) -> pd.Series:
+        return pd.Series(scores).groupby(labels.values).mean().reindex(eligible_clusters)
+
+    sig_means = _per_cluster_means(sig_scores)
+
     import time as _time
     # Draw all N control gene-name lists up front (deterministic given `seed`),
-    # then score them in a single batched pass over the atlas (Change #6: this
-    # replaces N separate AUCell passes — the per-cell ranking is shared).
+    # then score them in a single batched pass over the atlas. Within each
+    # control set, genes drawn from the same bin are sampled WITHOUT
+    # replacement so a small bin can't double-count one control gene and
+    # mechanically inflate that bin's contribution to the null. If a bin has
+    # fewer candidates than required, fall back to with-replacement (rare).
+    from collections import Counter as _Counter
+    bin_demand: "_Counter[int]" = _Counter(int(gene_bins[idx]) for idx in matchable_idx)
     control_name_lists: List[List[str]] = []
     for _c in range(int(n_control_sets)):
-        ctrl_idx = [int(rng.choice(bin_to_candidates[int(gene_bins[idx])])) for idx in matchable_idx]
+        ctrl_idx: List[int] = []
+        for b, k in bin_demand.items():
+            cand = bin_to_candidates[b]
+            replace = cand.size < k
+            picks = rng.choice(cand, size=k, replace=replace)
+            ctrl_idx.extend(int(x) for x in np.atleast_1d(picks))
         control_name_lists.append([str(gene_names[i]) for i in ctrl_idx])
 
     _t0 = _time.time()
@@ -924,9 +954,12 @@ def compute_empirical_null_aucell(
     sig_vec = sig_means.to_numpy(dtype=np.float64)
     degenerate = ~np.isfinite(null_sd) | (null_sd == 0)
     z = np.where(degenerate, np.nan, (sig_vec - null_mean) / np.where(degenerate, 1.0, null_sd))
-    # one-sided empirical p (add-1 smoothing): controls >= signature
+    # one-sided empirical p (add-1 smoothing): controls >= signature. For
+    # degenerate clusters (null variance ≈ 0, all controls identical) the
+    # empirical p is meaningless — emit NaN so they're excluded from BH.
     ge_counts = (control_cluster_means >= sig_vec[None, :]).sum(axis=0)
     pvals = (1.0 + ge_counts) / (n_used + 1.0)
+    pvals = np.where(degenerate, np.nan, pvals)
 
     if degenerate.any():
         log.warning(
@@ -1122,14 +1155,16 @@ def compute_cluster_enrichment_stats(
         out_scores = scores[~mask]
         if in_scores.size < 2 or out_scores.size < 2:
             continue
-        # Welch's one-sided t-test: cluster > rest
-        t_stat, p_two = stats.ttest_ind(
-            in_scores, out_scores, equal_var=False, nan_policy="omit",
+        # Welch's one-sided t-test: cluster > rest. SciPy's alternative=
+        # parameter (>=1.6) gives the correct upper-tail p directly, avoiding
+        # the broken `p_two/2 if t>0` halving heuristic at t≈0 / degenerate
+        # variance.
+        t_stat, p_one = stats.ttest_ind(
+            in_scores, out_scores,
+            equal_var=False, nan_policy="omit", alternative="greater",
         )
-        # scipy's ttest_ind returns two-sided; convert to one-sided upper tail
-        if np.isnan(t_stat):
+        if np.isnan(t_stat) or np.isnan(p_one):
             continue
-        p_one = (p_two / 2.0) if t_stat > 0 else (1.0 - p_two / 2.0)
         rows.append({
             "cluster": str(cl),
             "n_cells": n,

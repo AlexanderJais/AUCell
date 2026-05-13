@@ -648,7 +648,7 @@ _analysis_params = (
     _gene_col_for_matching, annotation_col,
     padj_cutoff, log2fc_cutoff, min_ip_expression, ranking_metric,
     top_n_genes, aucell_top_fraction,
-    min_cells_per_cluster,
+    min_cells_per_cluster, int(min_cells_for_rank),
     umap_subsample,
     # POA-only atlas restriction
     bool(poa_active), mask_signature, int(poa_min_cells),
@@ -1459,9 +1459,10 @@ if run_button or st.session_state.analysis_done:
                     st.caption("No clusters fall below the POA cell-count gate.")
 
         st.subheader("Figure: bacTRAP Volcano Plot")
+        _volcano_highlight = [sanity_gene.strip()] if sanity_gene.strip() else []
         fig_volcano = figure_bactrap_volcano(
             bactrap_matched,
-            highlight_genes=["Pnoc"],
+            highlight_genes=_volcano_highlight,
             padj_cutoff=padj_cutoff,
             log2fc_cutoff=log2fc_cutoff,
             double_column=double_column,

@@ -327,6 +327,7 @@ def figure_bactrap_volcano(
     log2fc_cutoff: float = 1.0,
     top_n_labels: int = 15,
     double_column: bool = False,
+    title: Optional[str] = "bacTRAP translational profiling",
 ) -> plt.Figure:
     """
     Classic volcano plot of bacTRAP DESeq2 results.
@@ -426,7 +427,8 @@ def figure_bactrap_volcano(
 
     ax.set_xlabel(r"$\log_2$(Fold Change)")
     ax.set_ylabel(r"$-\log_{10}$(adjusted p-value)")
-    ax.set_title("bacTRAP translational profiling (PoA IP vs Input)")
+    if title:
+        ax.set_title(title)
     ax.legend(fontsize=5, frameon=False, loc="upper left")
 
     return fig
@@ -626,8 +628,13 @@ def figure_aucell_cluster_barplot(
     height = max(width * 0.6, n_bars * 0.18 + 0.8)
     fig, ax = plt.subplots(figsize=(width, height))
 
-    # Color by score
-    norm = Normalize(vmin=0, vmax=cluster_stats["mean"].max())
+    # Color by score. Use the actual min as vmin so dynamic range across the
+    # top-N stretches the full colormap rather than washing out top bars.
+    _vmin = float(cluster_stats["mean"].min())
+    _vmax = float(cluster_stats["mean"].max())
+    if _vmax <= _vmin:
+        _vmax = _vmin + 1e-9
+    norm = Normalize(vmin=_vmin, vmax=_vmax)
     cmap = plt.colormaps["magma"]
     colors = [cmap(norm(v)) for v in cluster_stats["mean"]]
 
@@ -799,7 +806,11 @@ def figure_aucell_zscore_violins(
     _zmin = float(np.nanmin(zvals))
     _zmax = float(np.nanmax(zvals))
     if not np.isfinite(_zmin) or not np.isfinite(_zmax) or _zmax <= _zmin:
-        _zmax = _zmin + 1.0
+        # All z's tied (or non-finite) — expand symmetrically around the value
+        # so the colour scale isn't visually biased upward.
+        _centre = _zmin if np.isfinite(_zmin) else 0.0
+        _zmin = _centre - 0.5
+        _zmax = _centre + 0.5
     norm = Normalize(vmin=_zmin, vmax=_zmax)
     for i, body in enumerate(parts["bodies"]):
         body.set_facecolor(cmap(norm(zvals[i])))
