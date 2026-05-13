@@ -545,7 +545,15 @@ if poa_only:
 if poa_mask is not None:
     _view_key = (hypomap_file.strip(), mask_signature, int(poa_mask.sum()))
     if st.session_state.get("_adata_view_key") != _view_key:
+        # Evict the previous view BEFORE materialising the new one so we
+        # don't briefly hold two multi-GB AnnData copies in memory at once.
+        st.session_state.pop("_adata_view", None)
         with st.spinner(f"Building POA-restricted atlas view ({int(poa_mask.sum()):,} cells)..."):
+            # `.copy()` is intentional: downstream helpers cache atlas-wide
+            # statistics on `adata_view.uns`, which only persists on a
+            # materialised AnnData (not a view). A view would otherwise force
+            # full re-computation of cluster means, detection rates, and the
+            # gene-expression bins on every re-run.
             st.session_state["_adata_view"] = adata[poa_mask].copy()
         st.session_state["_adata_view_key"] = _view_key
     adata_view = st.session_state["_adata_view"]
@@ -827,7 +835,9 @@ if run_button or st.session_state.analysis_done:
 
         # ---- AUCell input-layer validation (fix #2: guard against
         # non-raw-count layers silently being fed into AUCell) ----
-        aucell_qc = validate_aucell_input(adata_view, use_raw=True)
+        aucell_qc = validate_aucell_input(
+            adata_view, use_raw=True, seed=int(empirical_null_seed),
+        )
 
         progress.progress(80, text="Computing AUCell scores...")
 

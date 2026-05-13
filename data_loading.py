@@ -775,9 +775,13 @@ def compute_cluster_mean_expression(
     # is correct.  Without this the cluster means reflect raw UMI counts,
     # giving disproportionate weight to high-depth non-neuronal clusters
     # during correlation/NNLS.
+    # NOTE: the auto-detect path (normalize=None -> _looks_like_raw_counts)
+    # was dropped because the heuristic ran on the submatrix of selected
+    # signature genes — already-log-normalised data with a few high-mean
+    # genes could falsely "look raw" and get double-log-normalised.  All
+    # repo callers pass an explicit True/False; default to True.
     if normalize is None:
-        normalize = _looks_like_raw_counts(X_genes)
-        logger.info("compute_cluster_mean_expression: auto normalize=%s", normalize)
+        normalize = True
     if normalize and X_genes.size > 0:
         # Use raw totals when the extracted matrix itself came from raw
         totals_use_raw = use_raw or indices_in_raw

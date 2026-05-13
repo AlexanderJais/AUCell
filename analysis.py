@@ -1007,7 +1007,9 @@ def compute_empirical_null_aucell(
     return out
 
 
-def validate_aucell_input(adata, use_raw: bool = True, sample_size: int = 500) -> Dict:
+def validate_aucell_input(
+    adata, use_raw: bool = True, sample_size: int = 500, seed: int = 0,
+) -> Dict:
     """Sanity-check the expression layer that will be fed into AUCell.
 
     AUCell is defined on gene-expression *ranks* per cell; the paper (Aibar
@@ -1057,7 +1059,7 @@ def validate_aucell_input(adata, use_raw: bool = True, sample_size: int = 500) -
     n_cells = X.shape[0]
     sample_n = min(sample_size, n_cells)
     if n_cells > sample_n:
-        rng = np.random.default_rng(42)
+        rng = np.random.default_rng(int(seed))
         pick = rng.choice(n_cells, sample_n, replace=False)
         sample = X[pick, :]
     else:

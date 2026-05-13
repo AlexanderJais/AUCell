@@ -351,7 +351,9 @@ def figure_bactrap_volcano(
     logger.info("figure_bactrap_volcano: %d genes (%d dropped for NaN), highlight=%s",
                 len(df), n_before - len(df), highlight_genes)
     df["neg_log10_padj"] = -np.log10(df["padj"].clip(lower=1e-300))
-    df["neg_log10_padj"] = df["neg_log10_padj"].clip(upper=50)
+    _Y_CLIP = 50.0
+    _n_clipped = int((df["neg_log10_padj"] > _Y_CLIP).sum())
+    df["neg_log10_padj"] = df["neg_log10_padj"].clip(upper=_Y_CLIP)
 
     # Classify points
     sig_up = (df["padj"] < padj_cutoff) & (df["log2FoldChange"] > log2fc_cutoff)
@@ -427,6 +429,15 @@ def figure_bactrap_volcano(
 
     ax.set_xlabel(r"$\log_2$(Fold Change)")
     ax.set_ylabel(r"$-\log_{10}$(adjusted p-value)")
+    if _n_clipped:
+        # Surface the clipping so a stack of points at the top of the plot
+        # isn't read as "tied at exactly −log10(padj)=50".
+        ax.axhline(_Y_CLIP, color="grey", linestyle=":", linewidth=0.4, alpha=0.7)
+        ax.text(
+            ax.get_xlim()[1], _Y_CLIP,
+            f"  clipped at {_Y_CLIP:.0f} (n={_n_clipped})",
+            fontsize=5, color="grey", va="center", ha="left",
+        )
     if title:
         ax.set_title(title)
     ax.legend(fontsize=5, frameon=False, loc="upper left")
@@ -848,14 +859,19 @@ def figure_aucell_histogram(
     width = get_figure_width(double_column)
     fig, ax = plt.subplots(figsize=(width, width * 0.6))
 
-    # Remove zero scores for cleaner visualization
-    nonzero = aucell_scores[aucell_scores > 0]
+    # Plot the histogram on the nonzero subset only — equal-width bins over
+    # the full range would otherwise concentrate the AUCell zero-mass into a
+    # single bin that dwarfs the right tail and visually hides percentile
+    # lines. The exact zero count is reported in the corner annotation
+    # below.
     all_scores = aucell_scores
-
-    ax.hist(all_scores, bins=100, color="steelblue", edgecolor="none",
+    nonzero = all_scores[all_scores > 0]
+    plot_data = nonzero if nonzero.size else all_scores
+    ax.hist(plot_data, bins=100, color="steelblue", edgecolor="none",
             alpha=0.8, density=True)
 
-    # Mark percentiles
+    # Mark percentiles. Computed over ALL scores (including zeros) so the
+    # quoted percentile matches "what fraction of cells fall below this".
     for pct, ls, lbl in [(90, "--", "90th"), (95, "-.", "95th"), (99, ":", "99th")]:
         val = np.percentile(all_scores, pct)
         ax.axvline(val, color="firebrick", linestyle=ls, linewidth=0.8, alpha=0.8)
@@ -867,14 +883,15 @@ def figure_aucell_histogram(
     ax.text(mean_val, ax.get_ylim()[1] * 0.80, f" mean\n {mean_val:.4f}",
             fontsize=5, color="black", va="top")
 
-    ax.set_xlabel("AUCell score")
+    ax.set_xlabel("AUCell score (nonzero cells)")
     ax.set_ylabel("Density")
-    ax.set_title("AUCell score distribution (all cells)")
+    ax.set_title("AUCell score distribution")
 
     n_zero = int((all_scores == 0).sum())
     n_total = len(all_scores)
     ax.text(0.98, 0.98,
-            f"n = {n_total:,}\nzero = {n_zero:,} ({100*n_zero/n_total:.1f}%)",
+            f"n = {n_total:,}\nzero = {n_zero:,} ({100*n_zero/n_total:.1f}%)\n"
+            f"(zeros hidden from histogram)",
             transform=ax.transAxes, fontsize=5, va="top", ha="right",
             bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="grey", alpha=0.8))
 
