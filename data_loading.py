@@ -1,5 +1,6 @@
 """
-Data loading and gene matching utilities for bacTRAP-to-HypoMap mapping.
+Data loading and gene matching utilities for AUCell-based mapping of a
+bulk-RNA-seq DE signature onto a single-cell atlas.
 """
 
 import logging

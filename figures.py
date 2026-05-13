@@ -915,8 +915,8 @@ def figure_marker_gene_diagnostic(
     """
     Two-panel sanity-check plot for a Cre-driver / marker gene.
 
-    For each cluster in *cluster_order* (typically the top hits from the
-    composite ranking) two horizontal bars are drawn:
+    For each cluster in *cluster_order* (typically the top AUCell-ranked
+    clusters) two horizontal bars are drawn:
 
       * Left  — mean log-normalised expression of *gene_name*
       * Right — fraction of cells with non-zero counts for *gene_name*

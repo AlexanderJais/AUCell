@@ -12,13 +12,6 @@ The pipeline itself is **atlas-agnostic** — it consumes any DE table with
 `log2FoldChange` / `padj` and any AnnData atlas with a `raw` counts layer
 and cluster annotations.
 
-This repository is a focused **AUCell-only** carve-out of
-[AlexanderJais/bacTRAP-to-HypoMapMapping](https://github.com/AlexanderJais/bacTRAP-to-HypoMapMapping).
-The multi-method version (Pearson / Spearman correlation, Fisher's exact
-marker overlap, NNLS deconvolution, preranked GSEA, z-score heatmaps, and
-the composite consensus ranking) lives in that source repository and is not
-reproduced here.
-
 ## What the app does
 
 1. **Signature extraction.** From the DE table, keep genes with
@@ -99,6 +92,4 @@ python -m pytest tests/ -q
 ## Citing
 
 If you use this tool, please cite Aibar et al. 2017 (AUCell) and the atlas
-you mapped onto. The multi-method companion (correlation / Fisher / NNLS /
-GSEA / composite consensus) is available at
-[AlexanderJais/bacTRAP-to-HypoMapMapping](https://github.com/AlexanderJais/bacTRAP-to-HypoMapMapping).
+you mapped onto.

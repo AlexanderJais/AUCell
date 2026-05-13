@@ -22,9 +22,9 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Logging setup — writes to bactrap_hypomap.log alongside app.py
+# Logging setup — writes to aucell.log alongside app.py
 # ---------------------------------------------------------------------------
-_LOG_FILE = Path(__file__).parent / "bactrap_hypomap.log"
+_LOG_FILE = Path(__file__).parent / "aucell.log"
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -42,7 +42,7 @@ logger.info("="*60)
 logger.info("App startup / Streamlit rerun")
 
 st.set_page_config(
-    page_title="bacTRAP → HypoMap Mapping",
+    page_title="AUCell signature → atlas mapping",
     page_icon="🧬",
     layout="wide",
 )
@@ -163,9 +163,9 @@ n_markers_per_cluster = st.sidebar.slider(
 min_cells_per_cluster = st.sidebar.slider(
     "Min cells per cluster (markers)", 1, 100, 10, 1,
     help=(
-        "Minimum cell count required for a cluster to enter the marker / "
-        "correlation / Fisher / GSEA pipelines. Small clusters yield "
-        "unreliable Wilcoxon ranks. Distinct from 'Min cells for AUCell "
+        "Minimum cell count required for a cluster to enter the per-cluster "
+        "mean-expression and per-gene detection-rate computations that drive "
+        "signature refinement. Distinct from 'Min cells for AUCell "
         "top-N ranking' below, which only gates AUCell figure rankings."
     ),
 )
@@ -224,12 +224,11 @@ with st.sidebar.expander("Atlas restriction", expanded=False):
         "Restrict to POA cells only",
         value=False,
         help=(
-            "Run the entire pipeline (cluster means, marker genes, AUCell, "
-            "empirical null, Cre-driver baseline filter, and the four "
-            "orthogonal methods) over preoptic-area cells only — directly "
-            "comparable to HypoMap Table S1, which reports per-cluster Pnoc "
-            "means computed within POA cells. Off by default; when off, the "
-            "full hypothalamic atlas is used."
+            "Run the entire pipeline (per-cluster means, AUCell, empirical "
+            "null, and Cre-driver baseline filter) over preoptic-area cells "
+            "only — directly comparable to HypoMap Table S1, which reports "
+            "per-cluster Pnoc means computed within POA cells. Off by "
+            "default; when off, the full hypothalamic atlas is used."
         ),
     )
     if poa_only:
@@ -356,12 +355,10 @@ sanity_fraction_threshold = st.sidebar.slider(
 _baseline_help = (
     "**Ranking filter.** When > 0, drop clusters whose mean "
     "(log-normalized) Cre-driver expression falls below this floor "
-    "from every cluster-level ranking: correlation / Fisher / NNLS / "
-    "GSEA / composite consensus (survivors are re-ranked against one "
-    "another), AUCell cluster figures (1b, S2, 1c), and the heatmap "
-    "(S5, with z-scores recomputed against the filtered reference). "
+    "from the AUCell cluster figures (1b, S2, 1c) and the per-cell "
+    "AUCell projection (1a) — cells in dropped clusters are excluded. "
     "Filtered CSV downloads are suffixed with the filter signature "
-    "(e.g. `composite_ranking_pnoc_ge0p05.csv`). Set to 0 to disable. "
+    "(e.g. `aucell_per_cluster_pnoc_ge0p05.csv`). Set to 0 to disable. "
 )
 if poa_only:
     _baseline_help += (
@@ -420,10 +417,11 @@ if "analysis_done" not in st.session_state:
 # Main area
 # ---------------------------------------------------------------------------
 
-st.title("bacTRAP-to-HypoMap Mapping Tool")
+st.title("AUCell signature → single-cell atlas mapping")
 st.caption(
-    "Map preoptic area (PoA) bacTRAP translational profiling data onto the "
-    "murine HypoMap single-cell atlas to identify matching cell populations."
+    "Score per-cell enrichment of a bulk-RNA-seq DE signature on a "
+    "single-cell atlas with AUCell, against an expression-matched "
+    "empirical null. Worked example: bacTRAP → HypoMap."
 )
 
 # Check file inputs — must be existing files, not directories
@@ -772,7 +770,7 @@ if run_button or st.session_state.analysis_done:
                 f"the column with the highest match rate.\n"
                 f"3. If no column works, the atlas may be in a different "
                 f"species or use an unusual symbol convention — check the "
-                f"sample atlas keys logged to `bactrap_hypomap.log`."
+                f"sample atlas keys logged to `aucell.log`."
             )
             st.stop()
 
@@ -982,7 +980,7 @@ if run_button or st.session_state.analysis_done:
             def _null_progress(i, n, _p=progress, _N=int(empirical_null_n)):
                 # i/n is a fraction of the batched control-scoring pass; map it
                 # onto progress 83..93 so the bar stays monotone with the
-                # composite (94) / figures (95) steps.
+                # subsequent figure-generation step (95).
                 _p.progress(min(83 + int(10 * i / max(n, 1)), 93),
                             text=f"Empirical null: {_N} control sets ({int(100 * i / max(n, 1))}%)...")
 
@@ -1004,7 +1002,7 @@ if run_button or st.session_state.analysis_done:
                 logger.exception("Empirical-null AUCell computation failed")
                 st.warning(
                     f"Empirical-null AUCell computation failed: {e}. See "
-                    f"`bactrap_hypomap.log` for the traceback. Analysis "
+                    f"`aucell.log` for the traceback. Analysis "
                     f"continues without the empirical-null columns."
                 )
                 empirical_null_df = pd.DataFrame()
@@ -1095,11 +1093,11 @@ if run_button or st.session_state.analysis_done:
 
     st.session_state.analysis_done = True
 
-    # ---- Cre-driver sanity stats (up-front so the baseline filter below can
-    # feed the composite ranking, and the sanity tab can reuse the cache) ----
-    # Floor at min(markers gate, AUCell gate) so the baseline filter never
-    # drops an AUCell-eligible cluster just because it fell below sanity's
-    # own size gate (user raising min_cells_per_cluster above
+    # ---- Cre-driver sanity stats (up-front so the baseline filter below
+    # can use them, and the sanity tab can reuse the cache) ----
+    # Floor at min(cluster-mean gate, AUCell gate) so the baseline filter
+    # never drops an AUCell-eligible cluster just because it fell below
+    # sanity's own size gate (user raising min_cells_per_cluster above
     # min_cells_for_rank would otherwise silently tighten AUCell too).
     _sanity_min_cells = min(_eff_min_cells_markers, _eff_min_cells_rank)
     sanity_cache_key = (
@@ -1125,10 +1123,9 @@ if run_button or st.session_state.analysis_done:
 
     # ---- Optional baseline Cre-driver expression filter ----
     # When the slider is > 0, drop clusters whose mean Cre-driver expression
-    # falls below the floor BEFORE re-running the composite vote so
-    # correlation / Fisher / NNLS / GSEA all exclude them and the survivors
-    # are re-ranked against each other.  Applied post-cache so toggling the
-    # slider doesn't invalidate the expensive parts of the analysis.
+    # falls below the floor from the AUCell cluster figures and the per-cell
+    # projection. Applied post-cache so toggling the slider doesn't
+    # invalidate the expensive parts of the analysis.
     baseline_allowed = None
     baseline_filter_state = "disabled"  # "disabled" | "active" | "broken_missing_gene" | "broken_empty"
     if sanity_baseline_mean_expr > 0:
@@ -1227,7 +1224,7 @@ if run_button or st.session_state.analysis_done:
         }
 
     # Filename suffix applied to filter-affected CSV downloads so a
-    # collaborator who opens a 40-row composite_ranking.csv can tell from
+    # collaborator who opens a 40-row aucell_per_cluster.csv can tell from
     # the filename alone that it's a filtered subset, not the full atlas.
     # Segments combine in the order
     #   {cre_driver_filter}_{poaonly_suffix}_{refined_suffix}_{null_filter}
@@ -1278,11 +1275,9 @@ if run_button or st.session_state.analysis_done:
             f"**Baseline {sanity_gene} filter active** — "
             f"{len(baseline_allowed)} / {len(sanity_stats)} clusters pass "
             f"mean {sanity_gene} ≥ {sanity_baseline_mean_expr:.2f}. "
-            f"Applies to every cluster-level ranking (correlation, "
-            f"Fisher, NNLS, GSEA, composite, AUCell cluster figs 1b / S2 "
-            f"/ 1c, heatmap S5) **and** to the per-cell AUCell panel "
-            f"(fig 1a) and per-cell CSV, which drop cells belonging to "
-            f"filtered-out clusters."
+            f"Applies to the AUCell cluster figures (1b / S2 / 1c) **and** "
+            f"to the per-cell AUCell panel (fig 1a) and per-cell CSV, "
+            f"which drop cells belonging to filtered-out clusters."
         )
     elif baseline_filter_state == "broken_missing_gene":
         st.warning(
@@ -1942,8 +1937,7 @@ if run_button or st.session_state.analysis_done:
             f"In a **{sanity_gene}-Cre;NuTRAP** experiment we'd expect the "
             f"top-ranked HypoMap clusters to express *{sanity_gene}*. This panel "
             f"shows mean expression and fraction of cells expressing "
-            f"*{sanity_gene}* across the top-ranked clusters from the "
-            f"composite consensus."
+            f"*{sanity_gene}* across the top-ranked clusters by AUCell mean."
         )
         st.info(
             "**Caveats — read before interpreting:** "
@@ -1956,8 +1950,7 @@ if run_button or st.session_state.analysis_done:
             "**confidence weight**, not a hard filter."
         )
 
-        # sanity_stats is computed up-front (see post-cache block earlier)
-        # so the baseline-expression slider can feed the composite ranking.
+        # sanity_stats is computed up-front (see post-cache block earlier).
         # The tab just consumes the already-cached result.
         if sanity_stats is None or len(sanity_stats) == 0:
             st.error(
@@ -2003,9 +1996,9 @@ if run_button or st.session_state.analysis_done:
                 "Top N clusters to display", 5, 50, 20, 1,
                 key="sanity_top_n",
                 help=(
-                    "How many of the composite-consensus top clusters to "
-                    "show on the Cre-driver sanity panel. Widens or "
-                    "narrows the barplot; does not change any computation."
+                    "How many of the top AUCell-ranked clusters to show on "
+                    "the Cre-driver sanity panel. Widens or narrows the "
+                    "barplot; does not change any computation."
                 ),
             )
             top_clusters_sanity = ranked_clusters[:top_n_sanity]
@@ -2014,7 +2007,7 @@ if run_button or st.session_state.analysis_done:
             sanity_table = sanity_stats.loc[
                 [c for c in top_clusters_sanity if c in sanity_stats.index]
             ].copy()
-            # Add rank column from composite (or whichever source we used)
+            # Add rank column from whichever ranking source we used
             sanity_table["rank"] = [
                 ranked_clusters.index(c) + 1 if c in ranked_clusters else np.nan
                 for c in sanity_table.index
@@ -2221,7 +2214,7 @@ if run_button or st.session_state.analysis_done:
                 if _LOG_FILE.is_file():
                     try:
                         zf.writestr(
-                            "bactrap_hypomap.log",
+                            "aucell.log",
                             _LOG_FILE.read_text(errors="replace"),
                         )
                     except OSError:
@@ -2233,7 +2226,7 @@ if run_button or st.session_state.analysis_done:
             st.download_button(
                 "Download All Figures (ZIP)",
                 buf.getvalue(),
-                "bactrap_hypomap_figures.zip",
+                "aucell_figures.zip",
                 "application/zip",
                 use_container_width=True,
                 key="dl_all_figs_zip",
@@ -2315,7 +2308,7 @@ if run_button or st.session_state.analysis_done:
                 st.download_button(
                     "Download log file",
                     _log_bytes,
-                    "bactrap_hypomap.log", "text/plain",
+                    "aucell.log", "text/plain",
                     use_container_width=True,
                     key="dl_log_file",
                 )

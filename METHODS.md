@@ -1,12 +1,8 @@
 # Methods — AUCell-based DE-signature → single-cell-atlas mapping
 
-This document describes the AUCell-only pipeline implemented in this
+This document describes the AUCell-based pipeline implemented in this
 repository. The worked example is bacTRAP → HypoMap; the pipeline accepts
 any DE table + AnnData atlas pair.
-
-The multi-method companion (correlation / Fisher / NNLS / GSEA / composite)
-lives at
-[AlexanderJais/bacTRAP-to-HypoMapMapping](https://github.com/AlexanderJais/bacTRAP-to-HypoMapMapping).
 
 ## 1. Inputs
 
@@ -211,5 +207,3 @@ column widths, colour-blind-safe palettes.
 - Steuernagel, L., Lam, B.Y.H., Klemm, P. *et al.* HypoMap — a
   unified single-cell gene-expression atlas of the murine hypothalamus.
   *Nat. Metab.* **4**, 1402–1419 (2022). Example atlas.
-- Multi-method companion repository:
-  https://github.com/AlexanderJais/bacTRAP-to-HypoMapMapping
