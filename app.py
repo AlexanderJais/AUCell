@@ -25,6 +25,32 @@ from pathlib import Path
 # Logging setup — writes to aucell.log alongside app.py
 # ---------------------------------------------------------------------------
 _LOG_FILE = Path(__file__).parent / "aucell.log"
+# Cap on the number of trailing log lines embedded in downloads / ZIPs.
+# A long Streamlit session can accumulate MBs of log — embedding the whole
+# thing slows the ZIP path noticeably and is rarely useful for debugging,
+# where the recent traffic is what matters.
+_LOG_EXPORT_MAX_LINES = 5000
+
+
+def _read_log_for_export(path: Path, max_lines: int = _LOG_EXPORT_MAX_LINES) -> str:
+    """Read the tail of the log file (most recent `max_lines`) for export.
+
+    Reads efficiently for typical log sizes; for very large files we still
+    pull the whole text once and slice — keeping the implementation simple
+    and avoiding seek/rewind edge cases. If the file genuinely grows past
+    tens of MB the slice is fast in Python anyway.
+    """
+    txt = path.read_text(errors="replace")
+    lines = txt.splitlines()
+    if len(lines) <= max_lines:
+        return txt
+    truncated = lines[-max_lines:]
+    return (
+        f"[log truncated: showing last {max_lines} of {len(lines)} lines]\n"
+        + "\n".join(truncated)
+    )
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -1576,6 +1602,7 @@ if run_button or st.session_state.analysis_done:
             umap_coords, aucell_scores,
             double_column=double_column,
             subsample_idx=sub_indices_filtered,
+            seed=int(empirical_null_seed),
         )
         st.pyplot(fig_1a)
         _cache_fig("fig_1a_aucell_umap", fig_1a)
@@ -1644,6 +1671,7 @@ if run_button or st.session_state.analysis_done:
             highlight_clusters=_top15_aucell_clusters_ct,
             double_column=double_column,
             subsample_idx=sub_indices,
+            seed=int(empirical_null_seed),
         )
         st.pyplot(fig_1a_ct)
         _cache_fig("fig_1a_celltype_umap", fig_1a_ct)
@@ -2113,6 +2141,7 @@ if run_button or st.session_state.analysis_done:
             score_title="AUCell enrichment score",
             score_label="AUCell score",
             highlight_clusters=_top15_aucell_clusters,
+            seed=int(empirical_null_seed),
         )
         st.pyplot(fig_b)
         _cache_fig("fig_s4_umap_enrichment", fig_b)
@@ -2168,10 +2197,7 @@ if run_button or st.session_state.analysis_done:
                 # Include log file (best-effort; skip if unreadable).
                 if _LOG_FILE.is_file():
                     try:
-                        zf.writestr(
-                            "aucell.log",
-                            _LOG_FILE.read_text(errors="replace"),
-                        )
+                        zf.writestr("aucell.log", _read_log_for_export(_LOG_FILE))
                     except OSError:
                         logger.exception(
                             "Failed to include log file in export ZIP",
@@ -2249,7 +2275,7 @@ if run_button or st.session_state.analysis_done:
         st.subheader("Diagnostics")
         if _LOG_FILE.is_file():
             try:
-                _log_bytes = _LOG_FILE.read_text(errors="replace").encode()
+                _log_bytes = _read_log_for_export(_LOG_FILE).encode()
             except OSError as e:
                 # File exists but can't be read (permissions, lock, disk
                 # fault) — surface the reason rather than handing the user

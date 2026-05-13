@@ -52,6 +52,23 @@ def get_enriched_genes(
     has_padj = bactrap_df["padj"].notna().sum()
     passes_padj = (bactrap_df["padj"] < padj_cutoff).sum()
     passes_fc = (bactrap_df["log2FoldChange"] > log2fc_cutoff).sum()
+    # Sanity check: if the bacTRAP table is dominated by negative fold
+    # changes, the user has likely uploaded an Input-vs-IP table (sign
+    # inverted) and the positive-side filter will return ~nothing. Warn
+    # loudly so they get a useful breadcrumb instead of a silent zero.
+    sig_padj = (bactrap_df["padj"].notna()) & (bactrap_df["padj"] < padj_cutoff)
+    n_sig_up = int(((bactrap_df["log2FoldChange"] > 0) & sig_padj).sum())
+    n_sig_down = int(((bactrap_df["log2FoldChange"] < 0) & sig_padj).sum())
+    if (n_sig_up + n_sig_down) >= 100 and n_sig_up < 0.25 * (n_sig_up + n_sig_down):
+        logger.warning(
+            "get_enriched_genes: only %d of %d significant DE genes are "
+            "UP-regulated (%.1f%%). This is unusual for a bacTRAP IP-vs-Input "
+            "contrast — if you uploaded an Input-vs-IP table the sign is "
+            "flipped and the positive-side filter will keep almost nothing. "
+            "Verify the comparison direction in your DESeq2 output.",
+            n_sig_up, n_sig_up + n_sig_down,
+            100.0 * n_sig_up / max(n_sig_up + n_sig_down, 1),
+        )
     mask = (
         (bactrap_df["padj"].notna())
         & (bactrap_df["padj"] < padj_cutoff)
@@ -345,6 +362,7 @@ def compute_aucell_scores(
     top_fraction: float = 0.05,
     seed: int = 0,
     info_out: Optional[Dict] = None,
+    progress_callback=None,
 ) -> np.ndarray:
     """
     Compute AUCell scores for each cell.
@@ -535,8 +553,9 @@ def compute_aucell_scores(
     dense_buf = np.empty((eff_chunk, n_total_genes), dtype=np.float32)
     jitter_buf = np.empty((eff_chunk, n_total_genes), dtype=np.float32)
     js = np.float32(jitter_scale)
+    n_chunks = (n_cells + chunk_size - 1) // chunk_size if n_cells else 0
 
-    for start in range(0, n_cells, chunk_size):
+    for ci, start in enumerate(range(0, n_cells, chunk_size)):
         end = min(start + chunk_size, n_cells)
         chunk_n = end - start
         dense_view = dense_buf[:chunk_n]
@@ -574,6 +593,11 @@ def compute_aucell_scores(
         if max_auc > 0:
             scores[start:end] = chunk_auc / max_auc
         # else: scores already zero-initialised
+        if progress_callback is not None:
+            try:
+                progress_callback(ci + 1, n_chunks)
+            except Exception:
+                logger.debug("progress_callback raised; continuing", exc_info=True)
     del dense_buf, jitter_buf
 
     logger.info("  AUCell scores: mean=%.4f, std=%.4f, min=%.4f, max=%.4f",
@@ -743,7 +767,7 @@ def compute_aucell_scores_multi(
             try:
                 progress_callback(ci + 1, n_chunks)
             except Exception:
-                pass
+                logger.debug("progress_callback raised; continuing", exc_info=True)
 
     del dense_buf, jitter_buf
     logger.info("compute_aucell_scores_multi: done — scores mean=%.4f over %d signatures",
@@ -1169,6 +1193,17 @@ def compute_cluster_enrichment_stats(
     Welch's t-test (unequal variance). Multiple testing across clusters is
     corrected with Benjamini-Hochberg to give a per-cluster q-value.
 
+    Important caveat: the in-cluster vs out-of-cluster AUCell scores are NOT
+    strictly independent (every cell's score is computed from the same
+    per-cell gene rankings against a fixed signature). The Welch test
+    treats them as if they were, so the p-values it returns are
+    anti-conservative. Use them as a quick descriptive ranking, not as a
+    rigorous significance call — for the latter, prefer the matched-
+    expression empirical null implemented in
+    :func:`compute_empirical_null_aucell`, which compares each cluster's
+    score against its own permutation distribution and is robust to the
+    rank-coupling.
+
     This fills the gap the previous pipeline had: ranking clusters by mean
     AUCell alone cannot distinguish "strongly enriched" from "a small
     cluster that happens to have a slightly above-average mean" — the
@@ -1232,9 +1267,17 @@ def compute_cluster_enrichment_stats(
     df = df.sort_values(["qvalue", "pvalue"], ascending=True).reset_index(drop=True)
 
     n_sig = int(df["significant"].sum())
-    logger.info("compute_cluster_enrichment_stats: %d/%d clusters tested, "
-                "%d significant at BH-FDR q < %.3f",
-                len(df), len(unique_labels), n_sig, alpha)
+    # BH-FDR controls the false-discovery rate proportional to the number of
+    # tests; surface that count explicitly so a reader of the log can sanity-
+    # check the q-value scale against the chosen annotation level (more
+    # clusters -> more tests -> more expected discoveries at the same alpha).
+    logger.info(
+        "compute_cluster_enrichment_stats: %d/%d clusters tested (>= %d "
+        "cells), %d significant at BH-FDR q < %.3f (expected ~%.1f false "
+        "positives at this alpha if the global null held)",
+        len(df), len(unique_labels), int(min_cells), n_sig, alpha,
+        float(alpha) * len(df),
+    )
     return df
 
 

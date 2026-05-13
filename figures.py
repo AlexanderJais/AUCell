@@ -164,6 +164,7 @@ def figure_umap_enrichment(
     score_title: str = "bacTRAP enrichment score (PoA)",
     score_label: str = "Enrichment score",
     highlight_clusters: Optional[List[str]] = None,
+    seed: int = 0,
 ) -> plt.Figure:
     """
     Two-panel UMAP: left colored by cell-type annotation, right by enrichment score.
@@ -193,8 +194,9 @@ def figure_umap_enrichment(
         cell_labels = cell_labels[subsample_idx]
         enrichment_scores = enrichment_scores[subsample_idx]
 
-    # Shuffle points for fair overlapping
-    rng = np.random.default_rng(42)
+    # Shuffle points for fair overlapping (seed-driven so re-runs are
+    # reproducible against the analysis seed, not a hardcoded 42).
+    rng = np.random.default_rng(int(seed))
     order = rng.permutation(len(umap_coords))
     umap_coords = umap_coords[order]
     cell_labels = cell_labels[order]
@@ -455,6 +457,7 @@ def figure_aucell_umap(
     double_column: bool = False,
     point_size: float = 0.3,
     subsample_idx: Optional[np.ndarray] = None,
+    seed: int = 0,
 ) -> plt.Figure:
     """Publication-ready UMAP coloured by AUCell enrichment scores.
 
@@ -473,7 +476,7 @@ def figure_aucell_umap(
         aucell_scores = aucell_scores[subsample_idx]
 
     # Shuffle for fair overlap
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(int(seed))
     order = rng.permutation(len(umap_coords))
     umap_coords = umap_coords[order]
     aucell_scores = aucell_scores[order]
@@ -520,6 +523,7 @@ def figure_celltype_umap(
     double_column: bool = False,
     point_size: float = 0.3,
     subsample_idx: Optional[np.ndarray] = None,
+    seed: int = 0,
 ) -> plt.Figure:
     """Publication-ready UMAP coloured by cell-type annotation.
 
@@ -539,7 +543,7 @@ def figure_celltype_umap(
         umap_coords = umap_coords[subsample_idx]
         cell_labels = cell_labels[subsample_idx]
 
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(int(seed))
     order = rng.permutation(len(umap_coords))
     umap_coords = umap_coords[order]
     cell_labels = cell_labels[order]
