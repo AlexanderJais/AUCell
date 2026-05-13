@@ -515,36 +515,57 @@ def compute_aucell_scores(
     # split keeps `jitter_rng` decoupled from any future use of `sampling_rng`.
     del sampling_rng
 
-    # Process in cell chunks — vectorized within each chunk
-    chunk_size = 5000
+    # Process in cell chunks — vectorized within each chunk.
+    #
+    # Pre-allocate the dense + jitter buffers once and reuse across chunks.
+    # The old loop body produced ~2.7 GB of transient allocation per HypoMap
+    # chunk (float64 toarray + float32 astype copy + jitter alloc + jitter*scale
+    # alloc); preallocation keeps the chunk buffers stable across iterations.
+    # Chunk size is reduced from 5000 → 2000 to offset the buffers staying
+    # resident: argpartition() internally allocates a (chunk_n, n_genes)
+    # int64 scratch (~1 GB at 5000×28000) per call, so a smaller chunk_n
+    # caps the peak alongside the preallocated buffers.
+    #
+    # All RNG draws / arithmetic are bit-identical to the previous code path
+    # (numpy's Generator.random emits values in flat row-major order regardless
+    # of chunk size, so per-cell jitter is unchanged) — scores are identical.
+    chunk_size = 2000
     scores = np.zeros(n_cells, dtype=np.float32)
+    eff_chunk = min(chunk_size, n_cells) if n_cells else 1
+    dense_buf = np.empty((eff_chunk, n_total_genes), dtype=np.float32)
+    jitter_buf = np.empty((eff_chunk, n_total_genes), dtype=np.float32)
+    js = np.float32(jitter_scale)
 
     for start in range(0, n_cells, chunk_size):
         end = min(start + chunk_size, n_cells)
+        chunk_n = end - start
+        dense_view = dense_buf[:chunk_n]
+        jitter_view = jitter_buf[:chunk_n]
+
         X_chunk = X[start:end, :]
         if sparse.issparse(X_chunk):
-            X_chunk = np.asarray(X_chunk.toarray())
+            # scipy.sparse.csr_matrix.toarray accepts an `out=` buffer (≥ scipy
+            # 1.0); using it avoids materialising a separate float64 copy then
+            # casting to float32.
+            try:
+                X_chunk.toarray(out=dense_view)
+            except TypeError:
+                np.copyto(dense_view, X_chunk.toarray(), casting="unsafe")
         else:
-            X_chunk = np.asarray(X_chunk)
-        # Make a writable float32 copy so the in-place jitter add doesn't
-        # touch the underlying adata buffer.
-        X_chunk = X_chunk.astype(np.float32, copy=True)
-
-        chunk_n = X_chunk.shape[0]
+            np.copyto(dense_view, np.asarray(X_chunk), casting="unsafe")
 
         # Per-cell uniform jitter ∈ [0, jitter_scale). Smaller than the
         # smallest distinct gap, so distinct values keep their order while
         # ties are randomised — equivalent to ties.method="random" in R.
-        X_chunk += jitter_rng.random(
-            (chunk_n, n_total_genes), dtype=np.float32,
-        ) * jitter_scale
+        jitter_rng.random(dtype=np.float32, out=jitter_view)
+        np.multiply(jitter_view, js, out=jitter_view)
+        np.add(dense_view, jitter_view, out=dense_view)
 
         # For each cell, get top-n gene indices via argpartition (O(n) per cell).
         # Then sort the top-n by jittered expression descending — fully
         # vectorised across cells — and reduce to AUC.
-        top_idx = np.argpartition(X_chunk, -n_top, axis=1)[:, -n_top:]
-        # Gather the jittered top-n values per cell, then argsort descending.
-        top_vals = np.take_along_axis(X_chunk, top_idx, axis=1)
+        top_idx = np.argpartition(dense_view, -n_top, axis=1)[:, -n_top:]
+        top_vals = np.take_along_axis(dense_view, top_idx, axis=1)
         order = np.argsort(-top_vals, axis=1)
         sorted_top = np.take_along_axis(top_idx, order, axis=1)
         is_hit = query_mask[sorted_top]  # (chunk_n, n_top) bool
@@ -553,6 +574,7 @@ def compute_aucell_scores(
         if max_auc > 0:
             scores[start:end] = chunk_auc / max_auc
         # else: scores already zero-initialised
+    del dense_buf, jitter_buf
 
     logger.info("  AUCell scores: mean=%.4f, std=%.4f, min=%.4f, max=%.4f",
                 float(scores.mean()), float(scores.std()), float(scores.min()), float(scores.max()))
@@ -675,19 +697,36 @@ def compute_aucell_scores_multi(
         int(n_query_per_sig.min()) if n_sigs else 0, max_nq, int(seed),
     )
 
-    chunk_size = 5000
+    chunk_size = 2000  # see compute_aucell_scores for rationale on size choice
     n_chunks = (n_cells + chunk_size - 1) // chunk_size
     scores = np.zeros((n_cells, n_sigs), dtype=np.float32)
+    # Preallocate dense + jitter buffers once and reuse — same memory
+    # optimisation as compute_aucell_scores. Arithmetic is bit-identical to
+    # the prior path so multi-vs-single equivalence (test T2) is preserved.
+    eff_chunk = min(chunk_size, n_cells) if n_cells else 1
+    dense_buf = np.empty((eff_chunk, n_genes), dtype=np.float32)
+    jitter_buf = np.empty((eff_chunk, n_genes), dtype=np.float32)
+    js = np.float32(jitter_scale)
     for ci, start in enumerate(range(0, n_cells, chunk_size)):
         end = min(start + chunk_size, n_cells)
-        X_chunk = X[start:end, :]
-        X_chunk = np.asarray(X_chunk.toarray()) if sparse.issparse(X_chunk) else np.asarray(X_chunk)
-        X_chunk = X_chunk.astype(np.float32, copy=True)
-        chunk_n = X_chunk.shape[0]
-        X_chunk += jitter_rng.random((chunk_n, n_genes), dtype=np.float32) * jitter_scale
+        chunk_n = end - start
+        dense_view = dense_buf[:chunk_n]
+        jitter_view = jitter_buf[:chunk_n]
 
-        top_idx = np.argpartition(X_chunk, -n_top, axis=1)[:, -n_top:]      # (chunk_n, n_top)
-        vals = np.take_along_axis(X_chunk, top_idx, axis=1)
+        X_chunk = X[start:end, :]
+        if sparse.issparse(X_chunk):
+            try:
+                X_chunk.toarray(out=dense_view)
+            except TypeError:
+                np.copyto(dense_view, X_chunk.toarray(), casting="unsafe")
+        else:
+            np.copyto(dense_view, np.asarray(X_chunk), casting="unsafe")
+        jitter_rng.random(dtype=np.float32, out=jitter_view)
+        np.multiply(jitter_view, js, out=jitter_view)
+        np.add(dense_view, jitter_view, out=dense_view)
+
+        top_idx = np.argpartition(dense_view, -n_top, axis=1)[:, -n_top:]    # (chunk_n, n_top)
+        vals = np.take_along_axis(dense_view, top_idx, axis=1)
         order = np.argsort(-vals, axis=1)                                    # descending by value
         sorted_top = np.take_along_axis(top_idx, order, axis=1)              # (chunk_n, n_top)
 
@@ -706,6 +745,7 @@ def compute_aucell_scores_multi(
             except Exception:
                 pass
 
+    del dense_buf, jitter_buf
     logger.info("compute_aucell_scores_multi: done — scores mean=%.4f over %d signatures",
                 float(scores.mean()) if scores.size else 0.0, n_sigs)
     return scores
