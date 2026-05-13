@@ -876,16 +876,25 @@ def figure_aucell_histogram(
 
     # Mark percentiles. Computed over ALL scores (including zeros) so the
     # quoted percentile matches "what fraction of cells fall below this".
+    # Label alignment flips to the LEFT of the line when the line sits near
+    # the right edge so the text doesn't overflow the axes.
+    _xmin, _xmax = ax.get_xlim()
+    def _label_for(val):
+        # Within ~25% of the right edge → right-align so text grows leftward
+        return ("right", f"{{lbl}}\n {val:.4f}") if val > _xmin + 0.75 * (_xmax - _xmin) \
+            else ("left",  f" {{lbl}}\n {val:.4f}")
     for pct, ls, lbl in [(90, "--", "90th"), (95, "-.", "95th"), (99, ":", "99th")]:
         val = np.percentile(all_scores, pct)
         ax.axvline(val, color="firebrick", linestyle=ls, linewidth=0.8, alpha=0.8)
-        ax.text(val, ax.get_ylim()[1] * 0.95, f" {lbl}\n {val:.4f}",
-                fontsize=5, color="firebrick", va="top")
+        ha, tmpl = _label_for(val)
+        ax.text(val, ax.get_ylim()[1] * 0.95, tmpl.format(lbl=lbl).rstrip(),
+                fontsize=5, color="firebrick", va="top", ha=ha)
 
     mean_val = np.mean(all_scores)
     ax.axvline(mean_val, color="black", linestyle="-", linewidth=0.8)
-    ax.text(mean_val, ax.get_ylim()[1] * 0.80, f" mean\n {mean_val:.4f}",
-            fontsize=5, color="black", va="top")
+    ha, tmpl = _label_for(mean_val)
+    ax.text(mean_val, ax.get_ylim()[1] * 0.80, tmpl.format(lbl="mean").rstrip(),
+            fontsize=5, color="black", va="top", ha=ha)
 
     ax.set_xlabel("AUCell score (nonzero cells)")
     ax.set_ylabel("Density")

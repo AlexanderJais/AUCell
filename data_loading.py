@@ -555,9 +555,17 @@ def _map_var_indices_to_raw(
     if adata.raw is None:
         return gene_indices, np.ones(len(gene_indices), dtype=bool)
 
-    # Get gene names for the requested indices in adata.var
+    # Get gene names for the requested indices in adata.var. Indices that
+    # fall outside adata.n_vars are out-of-bounds (an upstream miscount)
+    # and are silently marked as not-survived so the caller drops them,
+    # rather than tripping an IndexError deep inside this helper.
     var_gene_names = get_gene_names_from_adata(adata)
-    query_names = [str(var_gene_names[i]).lower() for i in gene_indices]
+    n_var = len(var_gene_names)
+    oob_mask = (np.asarray(gene_indices) < 0) | (np.asarray(gene_indices) >= n_var)
+    query_names = [
+        str(var_gene_names[int(i)]).lower() if not oob else None
+        for i, oob in zip(gene_indices, oob_mask)
+    ]
 
     # Build lookup for raw var names — prefer gene symbols over Ensembl IDs
     # so that the lookup matches how match_genes() found these genes.
@@ -582,7 +590,7 @@ def _map_var_indices_to_raw(
     raw_indices = []
     survived = []
     for j, name in enumerate(query_names):
-        if name in raw_lookup:
+        if name is not None and name in raw_lookup:
             raw_indices.append(raw_lookup[name])
             survived.append(True)
         else:
@@ -654,7 +662,27 @@ def _extract_gene_submatrix(
     # full passes over nnz on HypoMap). Convert to CSC once up-front so
     # subsequent column slicing is O(nnz of the selected columns).
     if sparse.issparse(X) and X.getformat() != "csc":
-        X = X.tocsc()
+        # Cache the CSC view on adata so subsequent calls don't repay the
+        # tocsc() cost — gene-submatrix extraction is called repeatedly
+        # (per cluster mean, per detection rate, etc.) and each tocsc()
+        # is O(nnz) on HypoMap's ~1 billion stored values.
+        cache_key = "_csc_raw" if (use_raw and adata.raw is not None) else "_csc_X"
+        cached = adata.uns.get(cache_key)
+        if (
+            cached is not None
+            and sparse.issparse(cached)
+            and cached.shape == X.shape
+            and cached.dtype == X.dtype
+        ):
+            X = cached
+        else:
+            X = X.tocsc()
+            try:
+                adata.uns[cache_key] = X
+            except (TypeError, ValueError):
+                # Some AnnData versions reject sparse matrices in uns —
+                # fall through, we still saved this call's conversion.
+                pass
 
     # For small gene sets, a single fancy-indexed slice is fine.
     if n_genes <= 500:
