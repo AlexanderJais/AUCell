@@ -815,9 +815,15 @@ def _atlas_gene_mean_logexpr(adata, use_raw: bool = True, *, cache_suffix: str =
 def _expression_bins(gene_mean_expr: np.ndarray, n_bins: int) -> np.ndarray:
     """Assign each gene to an expression quantile bin (0..n_bins-1).
 
-    Ties (e.g. the large mass of never-expressed genes) collapse bins; the
-    returned array still gives every gene a finite bin index.  Cached-friendly
-    but cheap, so recomputed per call to follow the user's ``n_bins``.
+    Quantile-cuts on rank(method="first"), which BREAKS ties (ties are
+    assigned distinct ranks in encounter order). That gives every gene its
+    own rank position, so qcut sees ``n_genes`` unique ranks and produces
+    exactly ``n_bins`` equal-count bins. As a consequence: ties — including
+    the large mass of never-expressed (rank 1, 2, …) genes — are split
+    across bins by encounter order, NOT collapsed into a single bin. The
+    ``duplicates="drop"`` is therefore a defensive no-op here; it would
+    only trip if n_bins exceeded the number of unique ranks (impossible
+    after method="first").
     """
     s = pd.Series(np.asarray(gene_mean_expr, dtype=np.float64))
     try:

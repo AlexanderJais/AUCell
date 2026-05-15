@@ -452,6 +452,10 @@ def match_genes(
     # strongest signal rather than the arbitrary first occurrence.  Sort
     # order: smallest padj, then largest |log2FC|, with NaN padj last.
     n_before = len(bactrap_matched)
+    # mergesort is stable, so two rows with identical (padj, |log2FC|) keep
+    # their original DataFrame order and the first one wins drop_duplicates.
+    # If you need a different tie-breaker here, add another column to
+    # _sort_cols — relying on source order is documented behaviour.
     _sort_cols, _sort_asc = [], []
     if "padj" in bactrap_matched.columns:
         _sort_cols.append("padj")

@@ -733,7 +733,15 @@ def figure_aucell_violins(
     # Order by mean score (descending)
     df_top["cluster"] = pd.Categorical(df_top["cluster"], categories=top_clusters, ordered=True)
 
-    height = max(width * 0.5, 3.5)
+    # Scale height with cluster count. The old `max(width*0.5, 3.5)` floor
+    # produced an awkward near-square panel for 1-2 clusters (each violin
+    # ~0.2" tall in 3.5" of vertical space). With ≤3 clusters we drop the
+    # floor and use a tight per-row height instead.
+    n_rows = len(top_clusters)
+    if n_rows <= 3:
+        height = max(width * 0.25, 0.5 * n_rows + 0.8)
+    else:
+        height = max(width * 0.5, 3.5)
     fig, ax = plt.subplots(figsize=(width, height))
 
     parts = ax.violinplot(
@@ -808,7 +816,13 @@ def figure_aucell_zscore_violins(
         return fig
 
     df_top["cluster"] = pd.Categorical(df_top["cluster"], categories=top_clusters, ordered=True)
-    height = max(width * 0.5, 3.5)
+    # Same small-N branch as figure_aucell_violins — avoid an empty square
+    # panel for 1-3 clusters.
+    n_rows = len(top_clusters)
+    if n_rows <= 3:
+        height = max(width * 0.25, 0.5 * n_rows + 0.8)
+    else:
+        height = max(width * 0.5, 3.5)
     fig, ax = plt.subplots(figsize=(width, height))
 
     parts = ax.violinplot(
