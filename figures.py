@@ -164,6 +164,7 @@ def figure_umap_enrichment(
     score_title: str = "bacTRAP enrichment score (PoA)",
     score_label: str = "Enrichment score",
     highlight_clusters: Optional[List[str]] = None,
+    seed: int = 0,
 ) -> plt.Figure:
     """
     Two-panel UMAP: left colored by cell-type annotation, right by enrichment score.
@@ -193,8 +194,9 @@ def figure_umap_enrichment(
         cell_labels = cell_labels[subsample_idx]
         enrichment_scores = enrichment_scores[subsample_idx]
 
-    # Shuffle points for fair overlapping
-    rng = np.random.default_rng(42)
+    # Shuffle points for fair overlapping (seed-driven so re-runs are
+    # reproducible against the analysis seed, not a hardcoded 42).
+    rng = np.random.default_rng(int(seed))
     order = rng.permutation(len(umap_coords))
     umap_coords = umap_coords[order]
     cell_labels = cell_labels[order]
@@ -327,6 +329,7 @@ def figure_bactrap_volcano(
     log2fc_cutoff: float = 1.0,
     top_n_labels: int = 15,
     double_column: bool = False,
+    title: Optional[str] = "bacTRAP translational profiling",
 ) -> plt.Figure:
     """
     Classic volcano plot of bacTRAP DESeq2 results.
@@ -350,7 +353,9 @@ def figure_bactrap_volcano(
     logger.info("figure_bactrap_volcano: %d genes (%d dropped for NaN), highlight=%s",
                 len(df), n_before - len(df), highlight_genes)
     df["neg_log10_padj"] = -np.log10(df["padj"].clip(lower=1e-300))
-    df["neg_log10_padj"] = df["neg_log10_padj"].clip(upper=50)
+    _Y_CLIP = 50.0
+    _n_clipped = int((df["neg_log10_padj"] > _Y_CLIP).sum())
+    df["neg_log10_padj"] = df["neg_log10_padj"].clip(upper=_Y_CLIP)
 
     # Classify points
     sig_up = (df["padj"] < padj_cutoff) & (df["log2FoldChange"] > log2fc_cutoff)
@@ -426,7 +431,17 @@ def figure_bactrap_volcano(
 
     ax.set_xlabel(r"$\log_2$(Fold Change)")
     ax.set_ylabel(r"$-\log_{10}$(adjusted p-value)")
-    ax.set_title("bacTRAP translational profiling (PoA IP vs Input)")
+    if _n_clipped:
+        # Surface the clipping so a stack of points at the top of the plot
+        # isn't read as "tied at exactly −log10(padj)=50".
+        ax.axhline(_Y_CLIP, color="grey", linestyle=":", linewidth=0.4, alpha=0.7)
+        ax.text(
+            ax.get_xlim()[1], _Y_CLIP,
+            f"  clipped at {_Y_CLIP:.0f} (n={_n_clipped})",
+            fontsize=5, color="grey", va="center", ha="left",
+        )
+    if title:
+        ax.set_title(title)
     ax.legend(fontsize=5, frameon=False, loc="upper left")
 
     return fig
@@ -442,6 +457,7 @@ def figure_aucell_umap(
     double_column: bool = False,
     point_size: float = 0.3,
     subsample_idx: Optional[np.ndarray] = None,
+    seed: int = 0,
 ) -> plt.Figure:
     """Publication-ready UMAP coloured by AUCell enrichment scores.
 
@@ -460,7 +476,7 @@ def figure_aucell_umap(
         aucell_scores = aucell_scores[subsample_idx]
 
     # Shuffle for fair overlap
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(int(seed))
     order = rng.permutation(len(umap_coords))
     umap_coords = umap_coords[order]
     aucell_scores = aucell_scores[order]
@@ -507,6 +523,7 @@ def figure_celltype_umap(
     double_column: bool = False,
     point_size: float = 0.3,
     subsample_idx: Optional[np.ndarray] = None,
+    seed: int = 0,
 ) -> plt.Figure:
     """Publication-ready UMAP coloured by cell-type annotation.
 
@@ -526,7 +543,7 @@ def figure_celltype_umap(
         umap_coords = umap_coords[subsample_idx]
         cell_labels = cell_labels[subsample_idx]
 
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(int(seed))
     order = rng.permutation(len(umap_coords))
     umap_coords = umap_coords[order]
     cell_labels = cell_labels[order]
@@ -559,8 +576,6 @@ def figure_celltype_umap(
     ax.set_yticks([])
     for spine in ax.spines.values():
         spine.set_visible(False)
-
-    _add_umap_axis_arrows(ax)
 
     handles = [
         plt.Line2D([0], [0], marker="o", color="w",
@@ -628,8 +643,13 @@ def figure_aucell_cluster_barplot(
     height = max(width * 0.6, n_bars * 0.18 + 0.8)
     fig, ax = plt.subplots(figsize=(width, height))
 
-    # Color by score
-    norm = Normalize(vmin=0, vmax=cluster_stats["mean"].max())
+    # Color by score. Use the actual min as vmin so dynamic range across the
+    # top-N stretches the full colormap rather than washing out top bars.
+    _vmin = float(cluster_stats["mean"].min())
+    _vmax = float(cluster_stats["mean"].max())
+    if _vmax <= _vmin:
+        _vmax = _vmin + 1e-9
+    norm = Normalize(vmin=_vmin, vmax=_vmax)
     cmap = plt.colormaps["magma"]
     colors = [cmap(norm(v)) for v in cluster_stats["mean"]]
 
@@ -713,15 +733,23 @@ def figure_aucell_violins(
     # Order by mean score (descending)
     df_top["cluster"] = pd.Categorical(df_top["cluster"], categories=top_clusters, ordered=True)
 
-    height = max(width * 0.5, 3.5)
+    # Scale height with cluster count. The old `max(width*0.5, 3.5)` floor
+    # produced an awkward near-square panel for 1-2 clusters (each violin
+    # ~0.2" tall in 3.5" of vertical space). With ≤3 clusters we drop the
+    # floor and use a tight per-row height instead.
+    n_rows = len(top_clusters)
+    if n_rows <= 3:
+        height = max(width * 0.25, 0.5 * n_rows + 0.8)
+    else:
+        height = max(width * 0.5, 3.5)
     fig, ax = plt.subplots(figsize=(width, height))
 
     parts = ax.violinplot(
         [df_top.loc[df_top["cluster"] == c, "score"].values for c in top_clusters],
         positions=range(len(top_clusters)),
         vert=False,
-        showmeans=True,
-        showmedians=True,
+        showmeans=False,
+        showmedians=False,
         showextrema=False,
     )
 
@@ -733,13 +761,6 @@ def figure_aucell_violins(
         body.set_alpha(0.7)
         body.set_edgecolor("grey")
         body.set_linewidth(0.5)
-    if "cmeans" in parts:
-        parts["cmeans"].set_linewidth(0.8)
-        parts["cmeans"].set_color("black")
-    if "cmedians" in parts:
-        parts["cmedians"].set_linewidth(0.5)
-        parts["cmedians"].set_color("grey")
-        parts["cmedians"].set_linestyle("--")
 
     ax.set_yticks(range(len(top_clusters)))
     ax.set_yticklabels(top_clusters, fontsize=6)
@@ -749,17 +770,6 @@ def figure_aucell_violins(
     # Highest-mean cluster at the top of the plot (top_clusters[0]) rather
     # than at y=0 which matplotlib renders at the bottom.
     ax.invert_yaxis()
-
-    # Explicit legend for mean/median — without it the two vertical ticks
-    # inside each horizontal violin read as an ambiguous "I"-shape.
-    legend_handles = [
-        plt.Line2D([0], [0], color="black", linewidth=0.8, label="mean"),
-        plt.Line2D([0], [0], color="grey", linewidth=0.5, linestyle="--", label="median"),
-    ]
-    ax.legend(
-        handles=legend_handles, loc="lower right", fontsize=5,
-        frameon=False, handlelength=1.5, handletextpad=0.4,
-    )
 
     logger.info("figure_aucell_violins: %d clusters shown", len(top_clusters))
 
@@ -806,36 +816,36 @@ def figure_aucell_zscore_violins(
         return fig
 
     df_top["cluster"] = pd.Categorical(df_top["cluster"], categories=top_clusters, ordered=True)
-    height = max(width * 0.5, 3.5)
+    # Same small-N branch as figure_aucell_violins — avoid an empty square
+    # panel for 1-3 clusters.
+    n_rows = len(top_clusters)
+    if n_rows <= 3:
+        height = max(width * 0.25, 0.5 * n_rows + 0.8)
+    else:
+        height = max(width * 0.5, 3.5)
     fig, ax = plt.subplots(figsize=(width, height))
 
     parts = ax.violinplot(
         [df_top.loc[df_top["cluster"] == c, "score"].values for c in top_clusters],
         positions=range(len(top_clusters)),
-        vert=False, showmeans=True, showmedians=False, showextrema=False,
+        vert=False, showmeans=False, showmedians=False, showextrema=False,
     )
     cmap = plt.colormaps["viridis"]
     zvals = z.loc[top_clusters].to_numpy()
     _zmin = float(np.nanmin(zvals))
     _zmax = float(np.nanmax(zvals))
     if not np.isfinite(_zmin) or not np.isfinite(_zmax) or _zmax <= _zmin:
-        _zmax = _zmin + 1.0
+        # All z's tied (or non-finite) — expand symmetrically around the value
+        # so the colour scale isn't visually biased upward.
+        _centre = _zmin if np.isfinite(_zmin) else 0.0
+        _zmin = _centre - 0.5
+        _zmax = _centre + 0.5
     norm = Normalize(vmin=_zmin, vmax=_zmax)
     for i, body in enumerate(parts["bodies"]):
         body.set_facecolor(cmap(norm(zvals[i])))
         body.set_alpha(0.7)
         body.set_edgecolor("grey")
         body.set_linewidth(0.5)
-    if "cmeans" in parts:
-        parts["cmeans"].set_linewidth(0.8)
-        parts["cmeans"].set_color("black")
-
-    # Annotate each violin with its z-score
-    for i, c in enumerate(top_clusters):
-        ax.text(
-            df_top.loc[df_top["cluster"] == c, "score"].max(), i,
-            f"  z={zvals[i]:.1f}", va="center", ha="left", fontsize=5,
-        )
 
     ax.set_yticks(range(len(top_clusters)))
     ax.set_yticklabels(top_clusters, fontsize=6)
@@ -867,33 +877,48 @@ def figure_aucell_histogram(
     width = get_figure_width(double_column)
     fig, ax = plt.subplots(figsize=(width, width * 0.6))
 
-    # Remove zero scores for cleaner visualization
-    nonzero = aucell_scores[aucell_scores > 0]
+    # Plot the histogram on the nonzero subset only — equal-width bins over
+    # the full range would otherwise concentrate the AUCell zero-mass into a
+    # single bin that dwarfs the right tail and visually hides percentile
+    # lines. The exact zero count is reported in the corner annotation
+    # below.
     all_scores = aucell_scores
-
-    ax.hist(all_scores, bins=100, color="steelblue", edgecolor="none",
+    nonzero = all_scores[all_scores > 0]
+    plot_data = nonzero if nonzero.size else all_scores
+    ax.hist(plot_data, bins=100, color="steelblue", edgecolor="none",
             alpha=0.8, density=True)
 
-    # Mark percentiles
+    # Mark percentiles. Computed over ALL scores (including zeros) so the
+    # quoted percentile matches "what fraction of cells fall below this".
+    # Label alignment flips to the LEFT of the line when the line sits near
+    # the right edge so the text doesn't overflow the axes.
+    _xmin, _xmax = ax.get_xlim()
+    def _label_for(val):
+        # Within ~25% of the right edge → right-align so text grows leftward
+        return ("right", f"{{lbl}}\n {val:.4f}") if val > _xmin + 0.75 * (_xmax - _xmin) \
+            else ("left",  f" {{lbl}}\n {val:.4f}")
     for pct, ls, lbl in [(90, "--", "90th"), (95, "-.", "95th"), (99, ":", "99th")]:
         val = np.percentile(all_scores, pct)
         ax.axvline(val, color="firebrick", linestyle=ls, linewidth=0.8, alpha=0.8)
-        ax.text(val, ax.get_ylim()[1] * 0.95, f" {lbl}\n {val:.4f}",
-                fontsize=5, color="firebrick", va="top")
+        ha, tmpl = _label_for(val)
+        ax.text(val, ax.get_ylim()[1] * 0.95, tmpl.format(lbl=lbl).rstrip(),
+                fontsize=5, color="firebrick", va="top", ha=ha)
 
     mean_val = np.mean(all_scores)
     ax.axvline(mean_val, color="black", linestyle="-", linewidth=0.8)
-    ax.text(mean_val, ax.get_ylim()[1] * 0.80, f" mean\n {mean_val:.4f}",
-            fontsize=5, color="black", va="top")
+    ha, tmpl = _label_for(mean_val)
+    ax.text(mean_val, ax.get_ylim()[1] * 0.80, tmpl.format(lbl="mean").rstrip(),
+            fontsize=5, color="black", va="top", ha=ha)
 
-    ax.set_xlabel("AUCell score")
+    ax.set_xlabel("AUCell score (nonzero cells)")
     ax.set_ylabel("Density")
-    ax.set_title("AUCell score distribution (all cells)")
+    ax.set_title("AUCell score distribution")
 
     n_zero = int((all_scores == 0).sum())
     n_total = len(all_scores)
     ax.text(0.98, 0.98,
-            f"n = {n_total:,}\nzero = {n_zero:,} ({100*n_zero/n_total:.1f}%)",
+            f"n = {n_total:,}\nzero = {n_zero:,} ({100*n_zero/n_total:.1f}%)\n"
+            f"(zeros hidden from histogram)",
             transform=ax.transAxes, fontsize=5, va="top", ha="right",
             bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="grey", alpha=0.8))
 

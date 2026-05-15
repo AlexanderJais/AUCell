@@ -196,34 +196,105 @@ def _detect_gene_column(bactrap_df: pd.DataFrame) -> str:
     return first_col
 
 
-@st.cache_resource(show_spinner=False)
+def lookup_gene_in_atlas(
+    lookup: Dict[str, Tuple[str, int]],
+    name,
+) -> Optional[Tuple[str, int]]:
+    """Resolve a gene symbol against a lookup built by `_build_adata_gene_lookup`.
+
+    Tries the exact-case spelling first so case-distinct paralogs (e.g. mixed
+    mouse / human symbols) are not silently merged, then falls back to a
+    case-insensitive match.
+    """
+    name_str = str(name).strip()
+    if not name_str:
+        return None
+    hit = lookup.get(name_str)
+    if hit is not None:
+        return hit
+    return lookup.get(name_str.lower())
+
+
+def _atlas_identity(adata: ad.AnnData) -> Tuple[int, int, int]:
+    """Cheap, hashable atlas fingerprint used as a cache key supplement.
+
+    AnnData isn't itself hashable for Streamlit's caching, but the shape +
+    first/last var-name hashes are stable across reruns and distinguish two
+    different atlases loaded in the same session (catching the case where
+    `_build_adata_gene_lookup` would otherwise return the first atlas's
+    lookup for the second).
+    """
+    n_obs = int(adata.n_obs)
+    n_vars = int(adata.n_vars)
+    names = adata.var_names
+    fingerprint = hash((
+        str(names[0]) if len(names) else "",
+        str(names[-1]) if len(names) else "",
+    )) & 0xFFFFFFFF
+    return (n_obs, n_vars, fingerprint)
+
+
 def _build_adata_gene_lookup(
-    _adata: ad.AnnData, use_raw: bool = True,
+    adata: ad.AnnData, use_raw: bool = True,
+) -> Tuple[Dict[str, Tuple[str, int]], np.ndarray, bool]:
+    """Public lookup builder. Computes an atlas-identity fingerprint and
+    delegates to the cached implementation so two different atlases loaded in
+    the same Streamlit session can't silently share each other's lookup."""
+    return _build_adata_gene_lookup_cached(
+        adata, use_raw=use_raw, atlas_id=_atlas_identity(adata),
+    )
+
+
+@st.cache_resource(show_spinner=False)
+def _build_adata_gene_lookup_cached(
+    _adata: ad.AnnData,
+    use_raw: bool = True,
+    atlas_id: Tuple[int, int, int] = (0, 0, 0),
 ) -> Tuple[Dict[str, Tuple[str, int]], np.ndarray, bool]:
     """Build a comprehensive gene lookup from an AnnData object.
 
     The leading underscore on ``_adata`` tells Streamlit not to attempt to
     hash the AnnData argument (AnnData objects are not hashable by
-    Streamlit's caching machinery). Callers can still pass any AnnData
-    instance; the cached result is keyed by the remaining arguments and the
-    object's identity within the session.
+    Streamlit's caching machinery). ``atlas_id`` (produced by
+    `_atlas_identity`) is a hashable fingerprint that DOES participate in
+    the cache key so a different atlas loaded in the same session is not
+    silently served the first atlas's lookup.
 
     Returns:
-        lookup: lowercase gene name -> (display_name, column_index)
+        lookup: gene name -> (display_name, column_index). Keys include both
+                exact-case symbols and their lowercase form; exact case wins
+                when both are present, so case-distinct paralogs are
+                preserved while lookups remain case-insensitive by default.
         gene_names: array of resolved gene names
         is_raw: whether indices point into adata.raw.var
     """
+    del atlas_id  # only used to influence the Streamlit cache key
     adata = _adata
     has_raw = adata.raw is not None and use_raw
     logger.info("_build_adata_gene_lookup: has_raw=%s", has_raw)
     gene_names = get_gene_names_from_adata(adata, use_raw=has_raw)
 
     lookup: Dict[str, Tuple[str, int]] = {}
+    n_case_collisions = 0
     for idx, name in enumerate(gene_names):
         name_str = str(name).strip()
         key = name_str.lower()
-        if key and key != "nan":
-            lookup[key] = (name_str, idx)
+        if not key or key == "nan":
+            continue
+        # Exact-case key, only set if not already taken by an earlier gene with
+        # the same exact spelling — preserves case-distinct paralogs.
+        if name_str not in lookup:
+            lookup[name_str] = (name_str, idx)
+        # Lowercase fallback. Last-write-wins on case-folded collisions, but
+        # only used when exact case lookup misses.
+        if key in lookup and lookup[key][1] != idx:
+            n_case_collisions += 1
+        lookup[key] = (name_str, idx)
+    if n_case_collisions:
+        logger.warning(
+            "  %d case-folded gene-name collisions in lookup (exact-case "
+            "match still preferred at query time)", n_case_collisions,
+        )
 
     logger.info("  primary lookup size: %d (from resolved gene names)", len(lookup))
 
@@ -335,10 +406,9 @@ def match_genes(
 
     for i, bt_gene_raw in enumerate(bt_gene_values):
         bt_gene = bt_gene_raw.strip()
-        bt_gene_lower = bt_gene.lower()
-
-        if bt_gene_lower in adata_gene_lookup:
-            original_name, adata_idx = adata_gene_lookup[bt_gene_lower]
+        hit = lookup_gene_in_atlas(adata_gene_lookup, bt_gene)
+        if hit is not None:
+            original_name, adata_idx = hit
             matched_rows.append(bactrap_df.iloc[i])
             matched_gene_names.append(original_name)
             gene_to_adata_idx[original_name] = adata_idx
@@ -382,6 +452,10 @@ def match_genes(
     # strongest signal rather than the arbitrary first occurrence.  Sort
     # order: smallest padj, then largest |log2FC|, with NaN padj last.
     n_before = len(bactrap_matched)
+    # mergesort is stable, so two rows with identical (padj, |log2FC|) keep
+    # their original DataFrame order and the first one wins drop_duplicates.
+    # If you need a different tie-breaker here, add another column to
+    # _sort_cols — relying on source order is documented behaviour.
     _sort_cols, _sort_asc = [], []
     if "padj" in bactrap_matched.columns:
         _sort_cols.append("padj")
@@ -485,9 +559,17 @@ def _map_var_indices_to_raw(
     if adata.raw is None:
         return gene_indices, np.ones(len(gene_indices), dtype=bool)
 
-    # Get gene names for the requested indices in adata.var
+    # Get gene names for the requested indices in adata.var. Indices that
+    # fall outside adata.n_vars are out-of-bounds (an upstream miscount)
+    # and are silently marked as not-survived so the caller drops them,
+    # rather than tripping an IndexError deep inside this helper.
     var_gene_names = get_gene_names_from_adata(adata)
-    query_names = [str(var_gene_names[i]).lower() for i in gene_indices]
+    n_var = len(var_gene_names)
+    oob_mask = (np.asarray(gene_indices) < 0) | (np.asarray(gene_indices) >= n_var)
+    query_names = [
+        str(var_gene_names[int(i)]).lower() if not oob else None
+        for i, oob in zip(gene_indices, oob_mask)
+    ]
 
     # Build lookup for raw var names — prefer gene symbols over Ensembl IDs
     # so that the lookup matches how match_genes() found these genes.
@@ -512,7 +594,7 @@ def _map_var_indices_to_raw(
     raw_indices = []
     survived = []
     for j, name in enumerate(query_names):
-        if name in raw_lookup:
+        if name is not None and name in raw_lookup:
             raw_indices.append(raw_lookup[name])
             survived.append(True)
         else:
@@ -584,7 +666,27 @@ def _extract_gene_submatrix(
     # full passes over nnz on HypoMap). Convert to CSC once up-front so
     # subsequent column slicing is O(nnz of the selected columns).
     if sparse.issparse(X) and X.getformat() != "csc":
-        X = X.tocsc()
+        # Cache the CSC view on adata so subsequent calls don't repay the
+        # tocsc() cost — gene-submatrix extraction is called repeatedly
+        # (per cluster mean, per detection rate, etc.) and each tocsc()
+        # is O(nnz) on HypoMap's ~1 billion stored values.
+        cache_key = "_csc_raw" if (use_raw and adata.raw is not None) else "_csc_X"
+        cached = adata.uns.get(cache_key)
+        if (
+            cached is not None
+            and sparse.issparse(cached)
+            and cached.shape == X.shape
+            and cached.dtype == X.dtype
+        ):
+            X = cached
+        else:
+            X = X.tocsc()
+            try:
+                adata.uns[cache_key] = X
+            except (TypeError, ValueError):
+                # Some AnnData versions reject sparse matrices in uns —
+                # fall through, we still saved this call's conversion.
+                pass
 
     # For small gene sets, a single fancy-indexed slice is fine.
     if n_genes <= 500:
@@ -705,9 +807,13 @@ def compute_cluster_mean_expression(
     # is correct.  Without this the cluster means reflect raw UMI counts,
     # giving disproportionate weight to high-depth non-neuronal clusters
     # during correlation/NNLS.
+    # NOTE: the auto-detect path (normalize=None -> _looks_like_raw_counts)
+    # was dropped because the heuristic ran on the submatrix of selected
+    # signature genes — already-log-normalised data with a few high-mean
+    # genes could falsely "look raw" and get double-log-normalised.  All
+    # repo callers pass an explicit True/False; default to True.
     if normalize is None:
-        normalize = _looks_like_raw_counts(X_genes)
-        logger.info("compute_cluster_mean_expression: auto normalize=%s", normalize)
+        normalize = True
     if normalize and X_genes.size > 0:
         # Use raw totals when the extracted matrix itself came from raw
         totals_use_raw = use_raw or indices_in_raw
@@ -848,7 +954,10 @@ def get_atlas_cluster_mean_expr(
     """
     key = _atlas_stat_key(f"cluster_mean_expr_{annotation_col}", mask_signature)
     n_genes = len(gene_indices)
-    gi_hash = hash(tuple(int(i) for i in gene_indices))
+    # Sort indices before hashing so two callers with the same gene set in
+    # different orders hit the same cache entry (the function's output is
+    # order-independent — it's reindexed by gene before return).
+    gi_hash = hash(tuple(sorted(int(i) for i in gene_indices)))
     cached = adata.uns.get(key)
     if isinstance(cached, dict):
         df = cached.get("df")
@@ -893,6 +1002,18 @@ def get_atlas_gene_detection_rate(
         return cached
     use_raw_layer = bool(use_raw and adata.raw is not None)
     X = adata.raw.X if use_raw_layer else adata.X
+    # AnnData slicing semantics for `.raw` differ across versions: some keep
+    # the parent's full-atlas raw rows, others row-slice. If raw doesn't match
+    # the (possibly restricted) view's cell count, fall back to .X so the
+    # detection rate is computed on the cells we're actually scoring.
+    if use_raw_layer and X.shape[0] != adata.n_obs:
+        logger.warning(
+            "get_atlas_gene_detection_rate: adata.raw.X rows (%d) != adata.n_obs "
+            "(%d) — falling back to adata.X so detection rate matches the "
+            "active cell subset", X.shape[0], adata.n_obs,
+        )
+        X = adata.X
+        use_raw_layer = False
     n_cells = X.shape[0]
     if sparse.issparse(X):
         # Stored-nonzero count per column — O(nnz) time, O(n_genes) space, no
@@ -906,7 +1027,10 @@ def get_atlas_gene_detection_rate(
     gene_names = get_gene_names_from_adata(adata, use_raw=use_raw_layer)
     s = pd.Series(rates, index=[str(g) for g in gene_names])
     if s.index.duplicated().any():
-        s = s.groupby(level=0).max()
+        # Use .mean() to match compute_cluster_mean_expression /
+        # compute_fraction_expressing — otherwise the refinement filter
+        # compares values aggregated by different rules across helpers.
+        s = s.groupby(level=0).mean()
     adata.uns[key] = s
     logger.info("get_atlas_gene_detection_rate: computed & cached (%s, %d genes, median=%.4f)",
                 key, len(s), float(s.median()) if len(s) else float("nan"))
@@ -1021,12 +1145,11 @@ def compute_single_gene_cluster_stats(
 
     Returns ``None`` when the gene is absent from the atlas.
     """
-    key = str(gene_name).strip().lower()
-    if not key or key not in adata_gene_lookup:
+    hit = lookup_gene_in_atlas(adata_gene_lookup, gene_name)
+    if hit is None:
         logger.info("compute_single_gene_cluster_stats: '%s' not found in atlas", gene_name)
         return None
-
-    display_name, idx = adata_gene_lookup[key]
+    display_name, idx = hit
     logger.info("compute_single_gene_cluster_stats: '%s' -> '%s' (idx=%d, in_raw=%s)",
                 gene_name, display_name, idx, has_raw)
 

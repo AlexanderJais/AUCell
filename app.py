@@ -25,6 +25,32 @@ from pathlib import Path
 # Logging setup — writes to aucell.log alongside app.py
 # ---------------------------------------------------------------------------
 _LOG_FILE = Path(__file__).parent / "aucell.log"
+# Cap on the number of trailing log lines embedded in downloads / ZIPs.
+# A long Streamlit session can accumulate MBs of log — embedding the whole
+# thing slows the ZIP path noticeably and is rarely useful for debugging,
+# where the recent traffic is what matters.
+_LOG_EXPORT_MAX_LINES = 5000
+
+
+def _read_log_for_export(path: Path, max_lines: int = _LOG_EXPORT_MAX_LINES) -> str:
+    """Read the tail of the log file (most recent `max_lines`) for export.
+
+    Reads efficiently for typical log sizes; for very large files we still
+    pull the whole text once and slice — keeping the implementation simple
+    and avoiding seek/rewind edge cases. If the file genuinely grows past
+    tens of MB the slice is fast in Python anyway.
+    """
+    txt = path.read_text(errors="replace")
+    lines = txt.splitlines()
+    if len(lines) <= max_lines:
+        return txt
+    truncated = lines[-max_lines:]
+    return (
+        f"[log truncated: showing last {max_lines} of {len(lines)} lines]\n"
+        + "\n".join(truncated)
+    )
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -545,7 +571,15 @@ if poa_only:
 if poa_mask is not None:
     _view_key = (hypomap_file.strip(), mask_signature, int(poa_mask.sum()))
     if st.session_state.get("_adata_view_key") != _view_key:
+        # Evict the previous view BEFORE materialising the new one so we
+        # don't briefly hold two multi-GB AnnData copies in memory at once.
+        st.session_state.pop("_adata_view", None)
         with st.spinner(f"Building POA-restricted atlas view ({int(poa_mask.sum()):,} cells)..."):
+            # `.copy()` is intentional: downstream helpers cache atlas-wide
+            # statistics on `adata_view.uns`, which only persists on a
+            # materialised AnnData (not a view). A view would otherwise force
+            # full re-computation of cluster means, detection rates, and the
+            # gene-expression bins on every re-run.
             st.session_state["_adata_view"] = adata[poa_mask].copy()
         st.session_state["_adata_view_key"] = _view_key
     adata_view = st.session_state["_adata_view"]
@@ -648,7 +682,7 @@ _analysis_params = (
     _gene_col_for_matching, annotation_col,
     padj_cutoff, log2fc_cutoff, min_ip_expression, ranking_metric,
     top_n_genes, aucell_top_fraction,
-    min_cells_per_cluster,
+    min_cells_per_cluster, int(min_cells_for_rank),
     umap_subsample,
     # POA-only atlas restriction
     bool(poa_active), mask_signature, int(poa_min_cells),
@@ -827,7 +861,9 @@ if run_button or st.session_state.analysis_done:
 
         # ---- AUCell input-layer validation (fix #2: guard against
         # non-raw-count layers silently being fed into AUCell) ----
-        aucell_qc = validate_aucell_input(adata_view, use_raw=True)
+        aucell_qc = validate_aucell_input(
+            adata_view, use_raw=True, seed=int(empirical_null_seed),
+        )
 
         progress.progress(80, text="Computing AUCell scores...")
 
@@ -1044,10 +1080,12 @@ if run_button or st.session_state.analysis_done:
     # sanity's own size gate (user raising min_cells_per_cluster above
     # min_cells_for_rank would otherwise silently tighten AUCell too).
     _sanity_min_cells = min(_eff_min_cells_cluster, _eff_min_cells_rank)
+    _SANITY_NORMALIZE = True  # if this default changes, the cache key below
+    # also has to so the cached log-norm values don't survive a re-tune.
     sanity_cache_key = (
         hypomap_file.strip(), annotation_col,
         _sanity_min_cells, sanity_gene.strip().lower(),
-        mask_signature,
+        mask_signature, _SANITY_NORMALIZE,
     )
     _sanity_cached = st.session_state.get("_sanity_cache")
     if _sanity_cached is not None and _sanity_cached.get("key") == sanity_cache_key:
@@ -1059,7 +1097,7 @@ if run_button or st.session_state.analysis_done:
                 adata_gene_lookup=_adata_lookup,
                 has_raw=_adata_has_raw,
                 min_cells=_sanity_min_cells,
-                normalize=True,
+                normalize=_SANITY_NORMALIZE,
             )
         st.session_state["_sanity_cache"] = {
             "key": sanity_cache_key, "stats": sanity_stats,
@@ -1178,10 +1216,18 @@ if run_button or st.session_state.analysis_done:
         and isinstance(empirical_null_df, pd.DataFrame)
         and not empirical_null_df.empty
     )
-    # The POA-only segment is the full mask signature unless the user added
-    # more than two custom keywords, in which case it collapses to "poaonly".
+    # POA segment in download filenames. Cap the joined keyword list so a
+    # user supplying many keywords doesn't produce a pathologically long
+    # filename, but always carry at least 1-3 keywords + na suffix so the
+    # filename remains diagnostic rather than collapsing to a bare
+    # "poaonly".
+    def _truncated_mask_signature(sig: str, max_chars: int = 60) -> str:
+        if len(sig) <= max_chars:
+            return sig
+        return sig[: max_chars - 4] + "etc"
+
     _poa_segment = (
-        (mask_signature if len(poa_keywords) <= 2 else "poaonly") if poa_active else None
+        _truncated_mask_signature(mask_signature) if poa_active else None
     )
 
     def _filter_signature_parts() -> list:
@@ -1459,9 +1505,10 @@ if run_button or st.session_state.analysis_done:
                     st.caption("No clusters fall below the POA cell-count gate.")
 
         st.subheader("Figure: bacTRAP Volcano Plot")
+        _volcano_highlight = [sanity_gene.strip()] if sanity_gene.strip() else []
         fig_volcano = figure_bactrap_volcano(
             bactrap_matched,
-            highlight_genes=["Pnoc"],
+            highlight_genes=_volcano_highlight,
             padj_cutoff=padj_cutoff,
             log2fc_cutoff=log2fc_cutoff,
             double_column=double_column,
@@ -1565,6 +1612,7 @@ if run_button or st.session_state.analysis_done:
             umap_coords, aucell_scores,
             double_column=double_column,
             subsample_idx=sub_indices_filtered,
+            seed=int(empirical_null_seed),
         )
         st.pyplot(fig_1a)
         _cache_fig("fig_1a_aucell_umap", fig_1a)
@@ -1633,6 +1681,7 @@ if run_button or st.session_state.analysis_done:
             highlight_clusters=_top15_aucell_clusters_ct,
             double_column=double_column,
             subsample_idx=sub_indices,
+            seed=int(empirical_null_seed),
         )
         st.pyplot(fig_1a_ct)
         _cache_fig("fig_1a_celltype_umap", fig_1a_ct)
@@ -2102,6 +2151,7 @@ if run_button or st.session_state.analysis_done:
             score_title="AUCell enrichment score",
             score_label="AUCell score",
             highlight_clusters=_top15_aucell_clusters,
+            seed=int(empirical_null_seed),
         )
         st.pyplot(fig_b)
         _cache_fig("fig_s4_umap_enrichment", fig_b)
@@ -2157,10 +2207,7 @@ if run_button or st.session_state.analysis_done:
                 # Include log file (best-effort; skip if unreadable).
                 if _LOG_FILE.is_file():
                     try:
-                        zf.writestr(
-                            "aucell.log",
-                            _LOG_FILE.read_text(errors="replace"),
-                        )
+                        zf.writestr("aucell.log", _read_log_for_export(_LOG_FILE))
                     except OSError:
                         logger.exception(
                             "Failed to include log file in export ZIP",
@@ -2238,7 +2285,7 @@ if run_button or st.session_state.analysis_done:
         st.subheader("Diagnostics")
         if _LOG_FILE.is_file():
             try:
-                _log_bytes = _LOG_FILE.read_text(errors="replace").encode()
+                _log_bytes = _read_log_for_export(_LOG_FILE).encode()
             except OSError as e:
                 # File exists but can't be read (permissions, lock, disk
                 # fault) — surface the reason rather than handing the user
