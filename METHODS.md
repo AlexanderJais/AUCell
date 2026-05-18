@@ -39,13 +39,13 @@ user-chosen metric — π-score (default), log₂FC, `-log10(padj)`, or
 Two optional filters run **before** ranking and top-*N* selection:
 
 - **Detectability.** Drop candidate genes whose atlas-wide detection rate
-  is below `min_detection_rate` (default 0.01) or whose maximum
-  per-cluster log-norm mean is below `min_max_cluster_mean` (default 0.5).
-  Rationale: a gene that is undetectable in the atlas contributes
+  is below `min_detection_rate` (default 0.02) or whose maximum
+  per-cluster log-norm mean is below `min_max_cluster_mean` (default
+  0.05). Rationale: a gene that is undetectable in the atlas contributes
   uniformly to AUCell ranks and only adds noise.
 - **Specificity.** Drop candidate genes that are expressed in more than
   `specificity_max_cluster_fraction` (default 0.5) of clusters above
-  `specificity_cluster_mean_thresh` (default 1.0). Rationale: globally
+  `specificity_cluster_mean_thresh` (default 0.5). Rationale: globally
   highly-expressed genes (housekeeping, ribosomal, well-known broad-
   contaminants like `Sst`, `Polr2h`, `Eid2`, `Pdxp`, `Ppil1`, `Arl6ip4`,
   `Mrpl12`, `Emc9`) drown out cell-type-specific signal in rank-based
@@ -86,8 +86,9 @@ bins). For each cluster, compute:
 - `null_mean`, `null_sd` — control-set mean AUCell distribution
   parameters,
 - `z_empirical = (cluster_mean_observed − null_mean) / null_sd`,
-- `pvalue_empirical` — two-sided empirical *p*-value against the
-  bin-matched null,
+- `pvalue_empirical` — one-sided empirical *p*-value (fraction of
+  control sets whose cluster-mean AUCell is `≥` the signature's, with
+  add-1 smoothing),
 - `qvalue_empirical` — BH-FDR-adjusted *p*-value across the clusters that
   pass the cell-count gate.
 
@@ -103,21 +104,39 @@ signature enrichment.
 
 ### Acceptance criteria
 
-`scripts/validate_acceptance_criteria.py` runs the empirical null on a
-real HypoMap-like atlas and checks:
+`scripts/validate_acceptance_criteria.py` runs the analytics-only side
+of the pipeline (no Streamlit) against a live HypoMap atlas and a
+bacTRAP DE table, and prints a PASS/FAIL line per criterion. Two
+groups, documented in full at the top of the script:
 
-1. The signature passes empirical-null significance in at least one
-   biologically-plausible cluster.
-2. Random gene sets of the same size do **not** pass empirical-null
-   significance (Type-I error control).
-3. The Pnoc / well-known contaminant tripwires fire as expected when
-   refinement is enabled.
+- **C2 — Signature refinement.** Refinement keeps 200–305 of the ~340
+  candidate genes (C2.1); the 8 known broadly-expressed contaminants
+  drop under specificity (C2.2); `Pnoc` survives (C2.3); the top-25 by
+  empirical *z* excludes 3 named Arcuate clusters that the refinement is
+  meant to disqualify (C2.4); refinement off is a no-op on the candidate
+  list (C2.5).
+- **C3 — POA-only restriction.** POA mask retains ~20 000–40 000 cells
+  (C3.1, the band is widened from the per-cell rule because cluster-level
+  NA admission keeps all cells of POA-resident clusters); `C185-67
+  Pnoc.Mixed.GABA-2` survives (C3.2); the Cre-driver baseline at Pnoc
+  `≥` 0.15 retains 11–13 POA clusters (C3.3); the top-25 by empirical
+  *z* excludes 7 named non-POA clusters (C3.4); the 10 expected
+  POA-resident clusters appear in the top-25 (C3.5); POA-off mode is
+  bit-identical to the non-POA run (C3.6).
 
 Run it against your atlas:
 
 ```bash
-python scripts/validate_acceptance_criteria.py /path/to/atlas.h5ad
+python scripts/validate_acceptance_criteria.py \
+    --hypomap /path/to/hypomap.h5ad \
+    --bactrap /path/to/IPvsInput_deg.xlsx \
+    [--annotation-col C185_named] \
+    [--n-control-sets 100] \
+    [--baseline-cutoff 0.15] \
+    [--out results_acceptance.json]
 ```
+
+Expected wall-clock on the full atlas (~385 k cells): 10–20 min.
 
 ## 7. Cluster-level statistics (`compute_cluster_enrichment_stats`)
 
@@ -134,10 +153,11 @@ because it controls for gene-rank-distribution effects that the
 
 When **POA-only mode** is enabled (HypoMap-specific, but adaptable), a
 boolean mask over cells is built from a keyword search over a region
-column (default `Region_summarized`, default keywords `Preoptic`, `POA`).
-The mask is named `mask_signature` (e.g. `poaonly_preoptic_na_byc185named`)
-so downstream caches and CSV filenames stay distinct from full-atlas
-runs.
+column (default `Region_summarized`, default keyword `preoptic`;
+case-insensitive substring match, comma-separated additional keywords
+accepted in the sidebar). The mask is named `mask_signature` (e.g.
+`poaonly_preoptic_na_byc185named`) so downstream caches and CSV
+filenames stay distinct from full-atlas runs.
 
 NA-labelled cells (cells whose `Region_summarized` is missing in
 HypoMap) are handled at the **cluster** rather than the cell level when

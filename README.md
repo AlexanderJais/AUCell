@@ -30,8 +30,12 @@ and cluster annotations.
 5. **Cluster-level statistics.** Welch's one-sided *t*-test
    (cluster-vs-rest) with BH-FDR.
 6. **Region restriction (optional).** Subset the atlas to a region
-   (e.g. preoptic area in HypoMap) before running the entire pipeline;
-   keyword-driven.
+   (e.g. preoptic area in HypoMap) before running the entire pipeline.
+   Keyword-driven over a region column in `obs`; NA-labelled cells are
+   admitted at the **cluster** level (a cluster is kept iff it has ≥1
+   keyword-matching cell or every one of its cells is NA), so clusters
+   that are merely missing regional annotation in the atlas don't leak
+   into the region-restricted analysis. See METHODS §8.
 7. **Cre-driver sanity panel.** For a user-chosen gene (default `Pnoc`),
    report per-cluster mean expression and fraction expressing across the
    top AUCell-ranked clusters — useful for validating Cre-line-derived
@@ -73,8 +77,14 @@ data_loading.py                      # AnnData / DE table I/O, gene matching, PO
 app.py                               # Streamlit UI
 requirements.txt
 tests/
-  test_signature_refinement.py
-  test_poa_restriction.py
+  test_aucell_scoring.py             # AUCell rank/recovery semantics, raw-layer guard
+  test_cache_fingerprint.py          # atlas-stat cache key invariants
+  test_cluster_enrichment.py         # Welch t-test / FDR cluster stats
+  test_figures_smoke.py              # figure generators run end-to-end (needs adjustText)
+  test_gene_extraction.py            # gene-column auto-detection, Ensembl→symbol fallback
+  test_poa_restriction.py            # POA mask (per-cell + cluster-level NA admission)
+  test_poa_view_equivalence.py       # adata[mask].copy() ↔ full-atlas AUCell parity
+  test_signature_refinement.py       # detectability + specificity filter, drop log
 scripts/
   validate_acceptance_criteria.py    # live-atlas acceptance criteria for the full pipeline
 ```
