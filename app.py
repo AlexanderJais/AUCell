@@ -231,9 +231,14 @@ with st.sidebar.expander("Atlas restriction", expanded=False):
         poa_include_na = st.checkbox(
             "Include cells with no regional assignment (NA)", value=True,
             help=(
-                "Required to retain C185-67 Pnoc.Mixed.GABA-2 and other "
-                "clusters whose regional assignment is missing in HypoMap. "
-                "Off-by-default would exclude the highest-Pnoc S1 cluster."
+                "Cluster-level NA inclusion: a cluster is admitted if it has "
+                "≥1 cell whose `Region_summarized` matches a POA keyword, OR "
+                "if **every** one of its cells has a missing region label. "
+                "This retains C185-67 Pnoc.Mixed.GABA-2 (100 % NA in HypoMap) "
+                "while excluding clusters that contain a mix of NA and "
+                "non-POA, non-NA cells (e.g. striatal/cortical clusters like "
+                "C185-105) which would otherwise enter the POA-restricted "
+                "analysis purely via their NA cells."
             ),
         )
         poa_min_cells = st.number_input(
@@ -546,7 +551,8 @@ mask_signature = ""
 if poa_only:
     try:
         poa_mask = get_poa_cell_mask(
-            adata, poa_keywords=poa_keywords, include_na=poa_include_na, logger=logger,
+            adata, poa_keywords=poa_keywords, include_na=poa_include_na,
+            annotation_col=annotation_col, logger=logger,
         ).to_numpy(dtype=bool)
     except KeyError as e:
         st.error(
@@ -566,7 +572,7 @@ if poa_only:
         poa_mask = None  # nothing excluded — treat as no-op
         st.sidebar.caption(":warning: POA keywords matched every cell — no restriction applied.")
     else:
-        mask_signature = build_mask_signature(poa_keywords, poa_include_na)
+        mask_signature = build_mask_signature(poa_keywords, poa_include_na, annotation_col)
 
 if poa_mask is not None:
     _view_key = (hypomap_file.strip(), mask_signature, int(poa_mask.sum()))

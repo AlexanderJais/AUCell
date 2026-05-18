@@ -308,14 +308,17 @@ def check_c3_poa_restriction(
     poa_mask = get_poa_cell_mask(
         adata, region_col="Region_summarized",
         poa_keywords=("preoptic",), include_na=True,
+        annotation_col=annotation_col,
     ).to_numpy(dtype=bool)
     n_poa = int(poa_mask.sum())
-    mask_sig = build_mask_signature(("preoptic",), True)
+    mask_sig = build_mask_signature(("preoptic",), True, annotation_col)
 
-    # C3.1 — POA cell count
+    # C3.1 — POA cell count (cluster-level NA inclusion admits all cells of
+    # any cluster with ≥1 preoptic-labelled or all-NA cells, so the count is
+    # higher than the per-cell rule)
     results.append(_check(
-        "C3.1  POA mask retains 20 000..25 000 cells",
-        20_000 <= n_poa <= 25_000,
+        "C3.1  POA mask retains 20 000..40 000 cells",
+        20_000 <= n_poa <= 40_000,
         f"N_poa = {n_poa:,} of {adata.n_obs:,} ({100*n_poa/adata.n_obs:.1f}%)",
     ))
 
