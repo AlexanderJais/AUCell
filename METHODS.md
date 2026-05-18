@@ -135,8 +135,22 @@ because it controls for gene-rank-distribution effects that the
 When **POA-only mode** is enabled (HypoMap-specific, but adaptable), a
 boolean mask over cells is built from a keyword search over a region
 column (default `Region_summarized`, default keywords `Preoptic`, `POA`).
-The mask is named `mask_signature` (e.g. `poaonly_preoptic_poa`) so
-downstream caches and CSV filenames stay distinct from full-atlas runs.
+The mask is named `mask_signature` (e.g. `poaonly_preoptic_na_byc185named`)
+so downstream caches and CSV filenames stay distinct from full-atlas
+runs.
+
+NA-labelled cells (cells whose `Region_summarized` is missing in
+HypoMap) are handled at the **cluster** rather than the cell level when
+`include_na` is on. A cluster is admitted iff (a) at least one of its
+cells matches a POA keyword, or (b) every one of its cells has a
+missing region label. For an admitted cluster all of its cells are
+scored, regardless of their individual region labels. This retains
+`C185-67 Pnoc.Mixed.GABA-2` (100 % NA in HypoMap, the highest-Pnoc S1
+cluster) while excluding clusters that contain a mix of NA and
+non-POA, non-NA cells (e.g. striatal/cortical GABA clusters like
+`C185-105`, `C185-130`) — these would otherwise enter the
+POA-restricted analysis purely on the strength of their NA cells, even
+though HypoMap's regional annotation places them elsewhere.
 
 Once active, every downstream computation — cluster means, AUCell, the
 empirical null, the Cre-driver sanity panel, the UMAPs — runs against

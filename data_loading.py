@@ -1037,15 +1037,23 @@ def get_atlas_gene_detection_rate(
     return s
 
 
-def build_mask_signature(poa_keywords, include_na: bool) -> str:
+def build_mask_signature(poa_keywords, include_na: bool, annotation_col: Optional[str] = None) -> str:
     """Deterministic suffix used in cache keys and CSV filenames for the
     POA-only atlas restriction.
 
     ``build_mask_signature(("preoptic",), True)`` → ``"poaonly_preoptic_na"``.
+
+    When ``annotation_col`` is supplied AND ``include_na`` is True the NA
+    inclusion is applied at the *cluster* level (see ``get_poa_cell_mask``);
+    the column name is folded into the signature so the corrected mask gets
+    its own cache key / CSV filename and never collides with the legacy
+    per-cell-NA output.
     """
     parts = ["poaonly"] + sorted(str(kw).strip().lower() for kw in poa_keywords if str(kw).strip())
     if include_na:
         parts.append("na")
+        if annotation_col:
+            parts.append(f"by{str(annotation_col).strip().lower().replace('_', '')}")
     return "_".join(parts)
 
 
@@ -1055,21 +1063,46 @@ def get_poa_cell_mask(
     region_col: str = "Region_summarized",
     poa_keywords=("preoptic",),
     include_na: bool = True,
+    annotation_col: Optional[str] = None,
     logger=None,
 ) -> pd.Series:
     """Boolean mask of POA-compatible cells.
 
-    A cell is ``True`` iff either its ``region_col`` value is missing (NaN) and
-    ``include_na`` is True, or any keyword (case-insensitive) appears as a
-    substring of its ``region_col`` value.  Matches the per-cell methodology of
-    HypoMap Table S1 ("Pnoc means computed within POA cells"); ``include_na``
-    defaults to True so clusters with no regional assignment (e.g. the highest-
-    Pnoc S1 cluster `C185-67: Pnoc.Mixed.GABA-2`, 100 % NA) are retained.
+    Two NA-inclusion regimes are supported:
+
+    * **Per-cell** (``annotation_col=None``, legacy): a cell is ``True`` iff
+      either its ``region_col`` value is missing (NaN, when ``include_na`` is
+      True) or any keyword matches as a case-insensitive substring of its
+      ``region_col`` value. This is permissive — it admits NA cells from every
+      cluster, including clusters that have many non-POA, non-NA cells in
+      HypoMap, which pulls non-POA clusters (e.g. C185-105, C185-130) into
+      the POA-restricted analysis purely on the strength of their NA-labelled
+      cells.
+
+    * **Cluster-level NA inclusion** (``annotation_col`` provided AND
+      ``include_na`` True, recommended): admission is decided per cluster.
+      A cluster is admitted if **either** at least one of its cells has a
+      ``region_col`` value matching a keyword (the "genuinely POA-resident"
+      case) **or** every one of its cells has a missing region label (the
+      C185-67 *Pnoc.Mixed.GABA-2* case, 100 % NA in HypoMap). For an admitted
+      cluster, **all** of its cells are returned True regardless of their
+      individual region labels; for a non-admitted cluster, only its
+      keyword-matching cells are returned True (which, by construction, is
+      empty unless it contained keyword hits — in which case it would already
+      have been admitted).
+
+      This excludes mixed clusters where NA cells coexist with a non-trivial
+      population of non-POA, non-NA cells (e.g. striatal/cortical GABA
+      clusters), so they no longer enter the POA-restricted analysis purely
+      on the basis of their NA cells. It preserves the original biological
+      motivation of the NA-inclusion clause: catching POA-resident clusters
+      whose regional assignment HypoMap left unannotated.
 
     Raises
     ------
-    KeyError if ``region_col`` is absent from ``adata.obs`` (the message lists
-    the available columns whose name starts with "region", to help the caller).
+    KeyError if ``region_col`` (or, when supplied, ``annotation_col``) is
+    absent from ``adata.obs`` (the message lists the available columns whose
+    name starts with "region", to help the caller).
 
     Returns
     -------
@@ -1082,6 +1115,11 @@ def get_poa_cell_mask(
         raise KeyError(
             f"Region column '{region_col}' not found in adata.obs. "
             f"Columns containing 'region': {region_like or '(none)'}. "
+            f"All columns: {list(adata.obs.columns)}"
+        )
+    if annotation_col is not None and annotation_col not in adata.obs.columns:
+        raise KeyError(
+            f"Annotation column '{annotation_col}' not found in adata.obs. "
             f"All columns: {list(adata.obs.columns)}"
         )
 
@@ -1098,7 +1136,22 @@ def get_poa_cell_mask(
     # a string-NA cell shouldn't also count as a keyword hit
     keyword_hit = keyword_hit & ~na_mask
 
-    keep = keyword_hit | (na_mask if include_na else pd.Series(False, index=raw.index))
+    cluster_level = annotation_col is not None and include_na
+    if cluster_level:
+        clusters = adata.obs[annotation_col].astype(str).values
+        kw_arr = keyword_hit.to_numpy()
+        na_arr = na_mask.to_numpy()
+        cluster_has_kw = pd.Series(kw_arr, index=clusters).groupby(level=0).any()
+        cluster_all_na = pd.Series(na_arr, index=clusters).groupby(level=0).all()
+        admitted = cluster_has_kw | cluster_all_na
+        admitted_set = set(admitted[admitted].index)
+        keep = pd.Series(
+            np.isin(clusters, list(admitted_set)),
+            index=raw.index,
+        )
+    else:
+        keep = keyword_hit | (na_mask if include_na else pd.Series(False, index=raw.index))
+
     keep.index = adata.obs_names
     keep = keep.astype(bool)
 
@@ -1112,9 +1165,23 @@ def get_poa_cell_mask(
     excluded_breakdown = (
         text[~keep.values].value_counts().head(5).to_dict() if (n_total - n_keep) else {}
     )
-    log.info("POA restriction: keywords=%s, include_na=%s", list(keywords), include_na)
-    log.info("POA mask: N_poa = %d of %d cells (%.1f%%) — %d keyword matches + %d NA-included",
-             n_keep, n_total, 100.0 * n_keep / max(n_total, 1), n_kw, n_na)
+    log.info("POA restriction: keywords=%s, include_na=%s, annotation_col=%s, mode=%s",
+             list(keywords), include_na, annotation_col,
+             "cluster-level" if cluster_level else "per-cell")
+    if cluster_level:
+        n_admitted = int(admitted.sum())
+        n_total_clusters = int(len(admitted))
+        n_all_na_admitted = int((cluster_all_na & ~cluster_has_kw).sum())
+        log.info(
+            "POA mask (cluster-level): %d / %d clusters admitted "
+            "(%d via keyword, %d as all-NA); N_poa = %d of %d cells (%.1f%%)",
+            n_admitted, n_total_clusters,
+            int(cluster_has_kw.sum()), n_all_na_admitted,
+            n_keep, n_total, 100.0 * n_keep / max(n_total, 1),
+        )
+    else:
+        log.info("POA mask: N_poa = %d of %d cells (%.1f%%) — %d keyword matches + %d NA-included",
+                 n_keep, n_total, 100.0 * n_keep / max(n_total, 1), n_kw, n_na)
     log.info("Region breakdown of POA-compatible cells (top 5): %s", retained_breakdown)
     log.info("Region breakdown of EXCLUDED cells (top 5): %s", excluded_breakdown)
     return keep

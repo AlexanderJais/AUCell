@@ -145,5 +145,146 @@ def test_poa_mask_logging(caplog):
     assert "Region breakdown" in text
 
 
+# ---------------------------------------------------------------------------
+# 8. cluster-level NA inclusion (Option B fix)
+# ---------------------------------------------------------------------------
+
+def _cluster_obs(rows, *, region_col="Region_summarized", cluster_col="C185_named"):
+    """rows: list of (cluster_name, region_value)."""
+    df = pd.DataFrame(
+        {
+            cluster_col: [r[0] for r in rows],
+            region_col: [r[1] for r in rows],
+        },
+        index=[f"cell{i}" for i in range(len(rows))],
+    )
+    return _FakeAdata(df)
+
+
+def test_cluster_level_admits_all_na_cluster():
+    # C185-67-style: all cells in a cluster are NA → the whole cluster is
+    # admitted, even though no cell matches the keyword
+    adata = _cluster_obs([
+        ("C185-67", np.nan),
+        ("C185-67", np.nan),
+        ("C185-67", np.nan),
+    ])
+    mask = get_poa_cell_mask(adata, annotation_col="C185_named")
+    assert list(mask) == [True, True, True]
+
+
+def test_cluster_level_rejects_mixed_na_non_poa_cluster():
+    # C185-105-style: some cells NA, some non-POA non-NA, no keyword match →
+    # cluster is NOT admitted, all cells excluded (this is the bug the fix
+    # is targeting: under per-cell semantics those NA cells would be kept)
+    adata = _cluster_obs([
+        ("C185-105", np.nan),
+        ("C185-105", np.nan),
+        ("C185-105", "Striatum"),
+        ("C185-105", "Cortex"),
+    ])
+    mask = get_poa_cell_mask(adata, annotation_col="C185_named")
+    assert list(mask) == [False, False, False, False]
+
+
+def test_cluster_level_admits_keyword_cluster_keeps_all_cells():
+    # Genuinely POA-resident cluster: some cells match "preoptic" → the whole
+    # cluster is admitted, including its non-preoptic non-NA cells. The
+    # admission rule operates at the cluster level: once admitted, every cell
+    # of that cluster is scored regardless of its individual region label.
+    adata = _cluster_obs([
+        ("C185-66", "Medial preoptic area"),
+        ("C185-66", "Lateral preoptic area"),
+        ("C185-66", "Arcuate hypothalamic nucleus"),
+        ("C185-66", np.nan),
+    ])
+    mask = get_poa_cell_mask(adata, annotation_col="C185_named")
+    assert list(mask) == [True, True, True, True]
+
+
+def test_cluster_level_mixed_clusters_independent():
+    # Several clusters in one frame: verify per-cluster admission rule
+    # operates independently. The expected outcome:
+    #   POA-cluster (keyword) → admitted (all cells kept)
+    #   ALL-NA-cluster (the C185-67 case) → admitted
+    #   MIXED-cluster (NA + non-POA, no keyword) → rejected (the bug fix)
+    #   NON-POA-cluster (no NA, no keyword) → rejected
+    adata = _cluster_obs([
+        ("POA",     "Medial preoptic area"),
+        ("POA",     "Arcuate hypothalamic nucleus"),  # kept (admitted cluster)
+        ("ALLNA",   np.nan),
+        ("ALLNA",   np.nan),
+        ("MIXED",   np.nan),                          # the spurious case
+        ("MIXED",   "Striatum"),
+        ("NONPOA",  "Cortex"),
+        ("NONPOA",  "Hippocampus"),
+    ])
+    mask = get_poa_cell_mask(adata, annotation_col="C185_named")
+    assert list(mask) == [True, True, True, True, False, False, False, False]
+
+
+def test_cluster_level_include_na_false_falls_back_to_per_cell():
+    # When include_na is False the cluster-level admission rule is moot
+    # (no NA inclusion clause to evaluate) and the function reduces to
+    # plain per-cell keyword matching, regardless of annotation_col.
+    adata = _cluster_obs([
+        ("C185-67",  np.nan),
+        ("C185-67",  np.nan),
+        ("C185-105", np.nan),
+        ("C185-105", "Striatum"),
+        ("C185-X",   "Medial preoptic area"),
+    ])
+    mask = get_poa_cell_mask(adata, annotation_col="C185_named", include_na=False)
+    assert list(mask) == [False, False, False, False, True]
+
+
+def test_cluster_level_missing_annotation_col_errors():
+    adata = _cluster_obs([("C185-67", np.nan)])
+    with pytest.raises(KeyError) as exc:
+        get_poa_cell_mask(adata, annotation_col="DoesNotExist")
+    assert "DoesNotExist" in str(exc.value)
+
+
+def test_cluster_level_legacy_default_unchanged():
+    # The per-cell default path (annotation_col=None) still admits NA cells
+    # from any cluster — preserves backward compatibility for callers that
+    # don't opt into the cluster-level rule.
+    adata = _cluster_obs([
+        ("C185-105", np.nan),                # would be admitted (legacy bug)
+        ("C185-105", "Striatum"),
+    ])
+    mask = get_poa_cell_mask(adata)          # annotation_col=None
+    assert list(mask) == [True, False]
+
+
+def test_build_mask_signature_with_annotation_col():
+    # The corrected (cluster-level) mask must produce a different signature
+    # so cache keys and CSV filenames never collide with the legacy output.
+    legacy = build_mask_signature(("preoptic",), True)
+    fixed = build_mask_signature(("preoptic",), True, "C185_named")
+    assert legacy == "poaonly_preoptic_na"
+    assert fixed == "poaonly_preoptic_na_byc185named"
+    assert legacy != fixed
+    # annotation_col is ignored when include_na is False (no NA clause)
+    assert (build_mask_signature(("preoptic",), False, "C185_named")
+            == build_mask_signature(("preoptic",), False))
+
+
+def test_cluster_level_logging(caplog):
+    adata = _cluster_obs([
+        ("POA",   "Medial preoptic area"),
+        ("POA",   "Arcuate hypothalamic nucleus"),
+        ("ALLNA", np.nan),
+        ("MIXED", np.nan),
+        ("MIXED", "Striatum"),
+    ])
+    caplog.set_level(logging.INFO)
+    get_poa_cell_mask(adata, annotation_col="C185_named",
+                     logger=logging.getLogger("test_poa_cluster"))
+    text = caplog.text
+    assert "cluster-level" in text
+    assert "clusters admitted" in text
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
