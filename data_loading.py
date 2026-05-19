@@ -1037,11 +1037,24 @@ def get_atlas_gene_detection_rate(
     return s
 
 
-def build_mask_signature(poa_keywords, include_na: bool, annotation_col: Optional[str] = None) -> str:
+def build_mask_signature(
+    poa_keywords,
+    include_na: bool,
+    annotation_col: Optional[str] = None,
+    *,
+    region_label: str = "poa",
+) -> str:
     """Deterministic suffix used in cache keys and CSV filenames for the
-    POA-only atlas restriction.
+    region-restricted atlas view.
 
     ``build_mask_signature(("preoptic",), True)`` → ``"poaonly_preoptic_na"``.
+    ``build_mask_signature(("arcuate","ventromedial","dorsomedial"), True,
+    region_label="mbh")`` → ``"mbhonly_arcuate_dorsomedial_ventromedial_na"``.
+
+    ``region_label`` controls the ``{label}only`` prefix; ``"poa"`` is the
+    backwards-compatible default. Supply ``"mbh"`` (mediobasal hypothalamus =
+    ARC + VMH + DMH) or any other short identifier for additional region
+    presets.
 
     When ``annotation_col`` is supplied AND ``include_na`` is True the NA
     inclusion is applied at the *cluster* level (see ``get_poa_cell_mask``);
@@ -1049,7 +1062,8 @@ def build_mask_signature(poa_keywords, include_na: bool, annotation_col: Optiona
     its own cache key / CSV filename and never collides with the legacy
     per-cell-NA output.
     """
-    parts = ["poaonly"] + sorted(str(kw).strip().lower() for kw in poa_keywords if str(kw).strip())
+    label = (str(region_label).strip().lower() or "poa")
+    parts = [f"{label}only"] + sorted(str(kw).strip().lower() for kw in poa_keywords if str(kw).strip())
     if include_na:
         parts.append("na")
         if annotation_col:

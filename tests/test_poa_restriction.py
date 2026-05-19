@@ -270,6 +270,41 @@ def test_build_mask_signature_with_annotation_col():
             == build_mask_signature(("preoptic",), False))
 
 
+def test_build_mask_signature_region_label_mbh():
+    # MBH (mediobasal hypothalamus = ARC + VMH + DMH) signature carries an
+    # "mbhonly" prefix so its CSV/cache outputs never collide with POA's.
+    sig = build_mask_signature(
+        ("arcuate", "ventromedial", "dorsomedial"), True,
+        region_label="mbh",
+    )
+    assert sig == "mbhonly_arcuate_dorsomedial_ventromedial_na"
+    # default (no region_label) stays POA → preserves existing on-disk caches
+    poa = build_mask_signature(("preoptic",), True)
+    assert poa == "poaonly_preoptic_na"
+    assert poa != sig
+    # region_label is case-folded and trimmed
+    assert build_mask_signature(("preoptic",), False, region_label="  MBH  ") \
+        == "mbhonly_preoptic"
+
+
+def test_get_poa_cell_mask_with_mbh_keywords():
+    # The mask function itself is region-agnostic — feeding MBH keywords
+    # selects ARC/VMH/DMH cells exactly the same way POA keywords select POA.
+    adata = _obs([
+        "Medial preoptic area",
+        "Arcuate hypothalamic nucleus",
+        "Ventromedial hypothalamic nucleus",
+        "Dorsomedial hypothalamic nucleus",
+        "Striatum",
+    ])
+    mask = get_poa_cell_mask(
+        adata,
+        poa_keywords=("arcuate", "ventromedial", "dorsomedial"),
+        include_na=False,
+    )
+    assert list(mask) == [False, True, True, True, False]
+
+
 def test_cluster_level_logging(caplog):
     adata = _cluster_obs([
         ("POA",   "Medial preoptic area"),
