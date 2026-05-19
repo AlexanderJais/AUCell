@@ -206,47 +206,93 @@ umap_subsample = st.sidebar.slider(
     ),
 )
 # ---- Atlas restriction: optionally restrict the whole pipeline
-# to POA cells (S1-aligned). Off by default — reproduces full-atlas behaviour.
+# to a chosen hypothalamic region. Off by default — reproduces full-atlas
+# behaviour. POA (preoptic) and MBH (ARC + VMH + DMH) ship as presets; a
+# Custom option exposes the raw keyword list.
+_REGION_PRESETS = {
+    "POA (preoptic area)": {
+        "label": "poa",
+        "pretty": "POA",
+        "keywords": "preoptic",
+    },
+    "MBH (ARC + VMH + DMH)": {
+        "label": "mbh",
+        "pretty": "MBH",
+        # Substring-matched case-insensitively against Region_summarized;
+        # "arcuate" → ARC, "ventromedial" → VMH, "dorsomedial" → DMH.
+        "keywords": "arcuate, ventromedial, dorsomedial",
+    },
+}
 with st.sidebar.expander("Atlas restriction", expanded=False):
-    poa_only = st.checkbox(
-        "Restrict to POA cells only",
-        value=False,
+    region_choice = st.selectbox(
+        "Region restriction",
+        ["None (full atlas)", "POA (preoptic area)", "MBH (ARC + VMH + DMH)", "Custom keywords"],
+        index=0,
         help=(
             "Run the entire pipeline (per-cluster means, AUCell, empirical "
-            "null, and Cre-driver baseline filter) over preoptic-area cells "
-            "only — directly comparable to HypoMap Table S1, which reports "
-            "per-cluster Pnoc means computed within POA cells. Off by "
-            "default; when off, the full hypothalamic atlas is used."
+            "null, and Cre-driver baseline filter) over cells from the "
+            "chosen hypothalamic region only. POA is directly comparable to "
+            "HypoMap Table S1; MBH covers the arcuate (ARC), ventromedial "
+            "(VMH), and dorsomedial (DMH) nuclei. Choose Custom keywords to "
+            "edit the substring list manually. Default: full hypothalamic "
+            "atlas."
         ),
     )
+    poa_only = region_choice != "None (full atlas)"
+    if region_choice in _REGION_PRESETS:
+        _preset = _REGION_PRESETS[region_choice]
+        region_label = _preset["label"]
+        region_pretty = _preset["pretty"]
+        _default_keywords = _preset["keywords"]
+    elif region_choice == "Custom keywords":
+        region_label = "custom"
+        region_pretty = "Custom-region"
+        _default_keywords = "preoptic"
+    else:
+        region_label = "poa"
+        region_pretty = "POA"
+        _default_keywords = "preoptic"
+
     if poa_only:
-        poa_keywords_input = st.text_input(
-            "POA keywords (comma-separated)", value="preoptic",
-            help=(
-                "Case-insensitive substring match against the "
-                "`Region_summarized` column. Add 'paraventricular', "
-                "'anteroventral', etc. to broaden the definition."
-            ),
-        )
+        if region_choice == "Custom keywords":
+            poa_keywords_input = st.text_input(
+                "Region keywords (comma-separated)", value=_default_keywords,
+                help=(
+                    "Case-insensitive substring match against the "
+                    "`Region_summarized` column. Example: "
+                    "`arcuate, ventromedial, dorsomedial` for MBH; "
+                    "`preoptic, paraventricular` to broaden POA."
+                ),
+            )
+        else:
+            poa_keywords_input = _default_keywords
+            st.caption(
+                f"Keywords (substring match against `Region_summarized`): "
+                f"`{poa_keywords_input}`."
+            )
         poa_include_na = st.checkbox(
             "Include cells with no regional assignment (NA)", value=True,
             help=(
                 "Cluster-level NA inclusion: a cluster is admitted if it has "
-                "≥1 cell whose `Region_summarized` matches a POA keyword, OR "
-                "if **every** one of its cells has a missing region label. "
-                "This retains C185-67 Pnoc.Mixed.GABA-2 (100 % NA in HypoMap) "
-                "while excluding clusters that contain a mix of NA and "
-                "non-POA, non-NA cells (e.g. striatal/cortical clusters like "
-                "C185-105) which would otherwise enter the POA-restricted "
-                "analysis purely via their NA cells."
+                "≥1 cell whose `Region_summarized` matches a region keyword, "
+                "OR if **every** one of its cells has a missing region "
+                "label. This retains clusters that HypoMap left "
+                "unannotated (e.g. C185-67 Pnoc.Mixed.GABA-2 for POA, 100 % "
+                "NA) while excluding mixed clusters where NA cells coexist "
+                "with non-target, non-NA cells (e.g. striatal/cortical "
+                "clusters like C185-105 under the POA mask)."
             ),
         )
         poa_min_cells = st.number_input(
-            "Min POA cells per cluster", min_value=1, max_value=2000, value=20, step=1,
-            help="Clusters with fewer than this many POA cells drop out of the analysis entirely.",
+            f"Min {region_pretty} cells per cluster",
+            min_value=1, max_value=2000, value=20, step=1,
+            help=(
+                f"Clusters with fewer than this many {region_pretty} cells "
+                f"drop out of the analysis entirely."
+            ),
         )
     else:
-        poa_keywords_input, poa_include_na, poa_min_cells = "preoptic", True, 20
+        poa_keywords_input, poa_include_na, poa_min_cells = _default_keywords, True, 20
 poa_keywords = tuple(s.strip().lower() for s in str(poa_keywords_input).split(",") if s.strip()) or ("preoptic",)
 poa_min_cells = int(poa_min_cells)
 
@@ -355,14 +401,13 @@ _baseline_help = (
 )
 if poa_only:
     _baseline_help += (
-        "**POA-only mode is on**, so this cutoff compares against the "
-        "Cre-driver gene's mean log-norm expression *in POA cells only* — "
-        "those values are typically larger than the full-atlas values for "
-        "genes enriched in POA cells, so the same numeric cutoff is "
-        "stricter here. Default 0.15 still excludes the warm-sensitive Pnoc "
-        "minority (POA-restricted Pnoc < 0.08), consistent with full-atlas "
-        "behaviour; 0.03 is the recommended Pnoc-Cre value when the warm-"
-        "sensitive subset should be retained."
+        f"**{region_pretty}-only mode is on**, so this cutoff compares against the "
+        f"Cre-driver gene's mean log-norm expression *in {region_pretty} cells only* — "
+        f"those values are typically larger than the full-atlas values for "
+        f"genes enriched in {region_pretty} cells, so the same numeric cutoff is "
+        f"stricter here. For POA-restricted Pnoc-Cre: default 0.15 excludes "
+        f"the warm-sensitive Pnoc minority (POA-restricted Pnoc < 0.08); use "
+        f"0.03 when that subset should be retained."
     )
 else:
     _baseline_help += (
@@ -556,23 +601,29 @@ if poa_only:
         ).to_numpy(dtype=bool)
     except KeyError as e:
         st.error(
-            f"**POA restriction can't be applied:** {e}\n\n"
-            f"Uncheck 'Restrict to POA cells only', or tell us which `.obs` "
-            f"column holds the regional labels."
+            f"**{region_pretty} restriction can't be applied:** {e}\n\n"
+            f"Set 'Region restriction' to 'None (full atlas)', or tell us "
+            f"which `.obs` column holds the regional labels."
         )
         st.stop()
     if not poa_mask.any():
         st.error(
-            "**POA restriction selected zero cells.** Check the keyword list "
-            "(default `preoptic`) against the values in `Region_summarized`, "
-            "or uncheck 'Restrict to POA cells only'."
+            f"**{region_pretty} restriction selected zero cells.** Check the "
+            f"keyword list (`{', '.join(poa_keywords)}`) against the values "
+            f"in `Region_summarized`, or set 'Region restriction' to "
+            f"'None (full atlas)'."
         )
         st.stop()
     if poa_mask.all():
         poa_mask = None  # nothing excluded — treat as no-op
-        st.sidebar.caption(":warning: POA keywords matched every cell — no restriction applied.")
+        st.sidebar.caption(
+            f":warning: {region_pretty} keywords matched every cell — no restriction applied."
+        )
     else:
-        mask_signature = build_mask_signature(poa_keywords, poa_include_na, annotation_col)
+        mask_signature = build_mask_signature(
+            poa_keywords, poa_include_na, annotation_col,
+            region_label=region_label,
+        )
 
 if poa_mask is not None:
     _view_key = (hypomap_file.strip(), mask_signature, int(poa_mask.sum()))
@@ -580,7 +631,7 @@ if poa_mask is not None:
         # Evict the previous view BEFORE materialising the new one so we
         # don't briefly hold two multi-GB AnnData copies in memory at once.
         st.session_state.pop("_adata_view", None)
-        with st.spinner(f"Building POA-restricted atlas view ({int(poa_mask.sum()):,} cells)..."):
+        with st.spinner(f"Building {region_pretty}-restricted atlas view ({int(poa_mask.sum()):,} cells)..."):
             # `.copy()` is intentional: downstream helpers cache atlas-wide
             # statistics on `adata_view.uns`, which only persists on a
             # materialised AnnData (not a view). A view would otherwise force
@@ -591,7 +642,7 @@ if poa_mask is not None:
     adata_view = st.session_state["_adata_view"]
     _n_poa = int(poa_mask.sum())
     st.sidebar.caption(
-        f"POA-only: **{_n_poa:,}** / {adata.n_obs:,} cells "
+        f"{region_pretty}-only: **{_n_poa:,}** / {adata.n_obs:,} cells "
         f"({100.0 * _n_poa / max(adata.n_obs, 1):.1f}%), signature `{mask_signature}`."
     )
 else:
@@ -724,12 +775,12 @@ if run_button or st.session_state.analysis_done:
         logger.info("  min cells for AUCell top-N ranking: %d", min_cells_for_rank)
         logger.info("  UMAP subsample: %d", umap_subsample)
         if poa_active:
-            logger.info("  POA restriction: ON — keywords=%s, include_na=%s, mask_signature='%s', "
-                        "min_poa_cells=%d, N_poa=%d/%d cells",
-                        list(poa_keywords), poa_include_na, mask_signature, poa_min_cells,
-                        int(poa_mask.sum()), adata.n_obs)
+            logger.info("  %s restriction: ON — keywords=%s, include_na=%s, mask_signature='%s', "
+                        "min_region_cells=%d, N_region=%d/%d cells",
+                        region_pretty, list(poa_keywords), poa_include_na, mask_signature,
+                        poa_min_cells, int(poa_mask.sum()), adata.n_obs)
         else:
-            logger.info("  POA restriction: OFF (full hypothalamic atlas)")
+            logger.info("  Region restriction: OFF (full hypothalamic atlas)")
         logger.info("  signature refinement: detectability=%s (min_det=%.3f, min_max_mean=%.3f), "
                     "specificity=%s (thresh=%.2f, max_frac=%.2f)",
                     sig_filter_detectability, sig_min_detection_rate, sig_min_max_cluster_mean,
@@ -1294,17 +1345,18 @@ if run_button or st.session_state.analysis_done:
         _n_poa = int(poa_mask.sum())
         _n_view_clusters = adata_view.obs[annotation_col].nunique()
         st.info(
-            f"**POA-only mode active** — the entire pipeline (cluster means, "
-            f"marker genes, AUCell, empirical null, Cre-driver baseline filter, "
-            f"correlation, Fisher, NNLS, GSEA, and the per-cell AUCell UMAP) "
-            f"runs over **{_n_poa:,}** preoptic-area cells / {adata.n_obs:,} "
-            f"total ({100.0 * _n_poa / max(adata.n_obs, 1):.1f}%; "
+            f"**{region_pretty}-only mode active** — the entire pipeline "
+            f"(cluster means, marker genes, AUCell, empirical null, "
+            f"Cre-driver baseline filter, correlation, Fisher, NNLS, GSEA, "
+            f"and the per-cell AUCell UMAP) runs over **{_n_poa:,}** "
+            f"{region_pretty} cells / {adata.n_obs:,} total "
+            f"({100.0 * _n_poa / max(adata.n_obs, 1):.1f}%; "
             f"{_n_view_clusters} clusters at `{annotation_col}`), keywords "
             f"`{', '.join(poa_keywords)}`, NA cells "
             f"{'included' if poa_include_na else 'excluded'}. "
-            f"Cre-driver baseline cutoffs now operate on POA-restricted values "
-            f"(see the slider tooltip). Filtered CSV downloads carry a "
-            f"`_{mask_signature}` suffix."
+            f"Cre-driver baseline cutoffs now operate on "
+            f"{region_pretty}-restricted values (see the slider tooltip). "
+            f"Filtered CSV downloads carry a `_{mask_signature}` suffix."
         )
 
     # ======================================================================
@@ -1318,15 +1370,15 @@ if run_button or st.session_state.analysis_done:
             st.metric("bacTRAP genes", len(bactrap_df))
         with col2:
             if poa_active:
-                st.metric("HypoMap cells (POA / total)",
+                st.metric(f"HypoMap cells ({region_pretty} / total)",
                           f"{adata_view.n_obs:,} / {adata.n_obs:,}",
-                          help="POA restriction active — the pipeline runs over the POA subset.")
+                          help=f"{region_pretty} restriction active — the pipeline runs over the {region_pretty} subset.")
             else:
                 st.metric("HypoMap cells", f"{adata.n_obs:,}")
         with col3:
             n_clusters = adata_view.obs[annotation_col].nunique()
             st.metric(f"Clusters ({annotation_col})", n_clusters,
-                      help=("POA-restricted cluster count" if poa_active else None))
+                      help=(f"{region_pretty}-restricted cluster count" if poa_active else None))
 
         st.markdown("---")
 
@@ -1461,17 +1513,17 @@ if run_button or st.session_state.analysis_done:
                          "max_cluster_mean, frac_clusters_above_thresh, reason.",
                 )
 
-        # ---- POA restriction diagnostics ----
+        # ---- Region restriction diagnostics ----
         if poa_active:
-            with st.expander("POA restriction diagnostics", expanded=False):
+            with st.expander(f"{region_pretty} restriction diagnostics", expanded=False):
                 _n_poa = int(poa_mask.sum())
                 _n_full = int(adata.n_obs)
                 st.markdown(
-                    f"**POA restriction active:** {_n_poa:,} of {_n_full:,} cells "
+                    f"**{region_pretty} restriction active:** {_n_poa:,} of {_n_full:,} cells "
                     f"retained ({100.0 * _n_poa / max(_n_full, 1):.1f}%) — keywords "
                     f"`{', '.join(poa_keywords)}`, NA cells "
                     f"{'**included**' if poa_include_na else '**excluded**'}, "
-                    f"`min_poa_cells = {poa_min_cells}`."
+                    f"`min_{region_label}_cells = {poa_min_cells}`."
                 )
                 try:
                     _region = adata.obs["Region_summarized"].astype(str)
@@ -1501,14 +1553,15 @@ if run_button or st.session_state.analysis_done:
                     _drop_df = pd.DataFrame(_drop_rows).sort_values(
                         "n_full_atlas_cells", ascending=False,
                     ).reset_index(drop=True)
+                    _drop_df = _drop_df.rename(columns={"n_poa_cells": f"n_{region_label}_cells"})
                     st.markdown(
-                        f"**{len(_drop_df)} clusters drop out** under the POA mask "
-                        f"(fewer than {_gate} POA cells) — full-atlas cell counts shown "
+                        f"**{len(_drop_df)} clusters drop out** under the {region_pretty} mask "
+                        f"(fewer than {_gate} {region_pretty} cells) — full-atlas cell counts shown "
                         f"for reference:"
                     )
                     st.dataframe(_drop_df, use_container_width=True)
                 else:
-                    st.caption("No clusters fall below the POA cell-count gate.")
+                    st.caption(f"No clusters fall below the {region_pretty} cell-count gate.")
 
         st.subheader("Figure: bacTRAP Volcano Plot")
         _volcano_highlight = [sanity_gene.strip()] if sanity_gene.strip() else []
