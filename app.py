@@ -525,6 +525,7 @@ from figures import (
     figure_aucell_umap,
     figure_celltype_umap,
     figure_gene_poa_umap,
+    figure_pnoc_overview,
     figure_aucell_cluster_barplot,
     figure_aucell_violins,
     figure_aucell_zscore_violins,
@@ -1792,6 +1793,7 @@ if run_button or st.session_state.analysis_done:
             min_value=1, max_value=20, value=6, step=1, key="fig2_top_n",
         )
         _fig2_hit = resolve_gene_index(adata, FIG2_GENE)
+        _fig2_ready = False
         if _fig2_hit is None:
             st.warning(
                 f"`{FIG2_GENE}` not found in the atlas — Figure 2 skipped."
@@ -1868,6 +1870,7 @@ if run_button or st.session_state.analysis_done:
                     help=f"Preoptic clusters ranked by mean {FIG2_GENE}.",
                 )
             plt.close(fig_2)
+            _fig2_ready = True
 
         st.markdown("---")
         st.caption(
@@ -1996,6 +1999,58 @@ if run_button or st.session_state.analysis_done:
                 help="Per-cell AUCell scores — use to reconstruct the full violin shape.",
             )
         plt.close(fig_1c)
+
+        # ---- Composite overview: Figure 2 + fig_1a + fig_1c ----
+        if _fig2_ready:
+            st.subheader(
+                "Composite: Pnoc preoptic UMAPs + cell-type UMAP + AUCell violins"
+            )
+            st.markdown(
+                "Four-panel overview. **Top:** the two Figure 2 panels (top "
+                "*Pnoc* preoptic clusters and *Pnoc* expression). **Bottom:** "
+                "`fig_1a_celltype_umap` (top-15 AUCell clusters) and "
+                "`fig_1c_aucell_violins`. All four panels share the same "
+                "rendering and equal dimensions."
+            )
+            fig_overview = figure_pnoc_overview(
+                fig2_umap=_fig2_umap,
+                fig2_labels=_fig2_labels,
+                fig2_region_mask=_fig2_region,
+                fig2_gene_expr=_fig2_expr,
+                fig2_expressing_mask=_fig2_expressing,
+                fig2_highlight=_fig2_highlight,
+                fig2_subsample_idx=_fig2_sub,
+                view_umap=umap_coords,
+                view_labels=cell_labels,
+                ct_highlight=_top15_aucell_clusters_ct,
+                view_subsample_idx=sub_indices,
+                aucell_scores=aucell_scores,
+                gene_name=FIG2_GENE,
+                region_label=FIG2_REGION_LABEL,
+                double_column=double_column,
+                violin_top_n=15,
+                violin_min_cluster_cells=min_cells_for_rank,
+                violin_allowed_clusters=_aucell_allowed,
+                seed=int(empirical_null_seed),
+            )
+            st.pyplot(fig_overview)
+            _cache_fig("fig_pnoc_overview", fig_overview)
+            _ov_pdf, _ov_svg = st.columns(2)
+            with _ov_pdf:
+                st.download_button(
+                    "Download PDF",
+                    st.session_state.fig_bytes["fig_pnoc_overview"]["pdf"],
+                    "fig_pnoc_overview.pdf", "application/pdf",
+                    key="dl_fig_overview_pdf",
+                )
+            with _ov_svg:
+                st.download_button(
+                    "Download SVG",
+                    st.session_state.fig_bytes["fig_pnoc_overview"]["svg"],
+                    "fig_pnoc_overview.svg", "image/svg+xml",
+                    key="dl_fig_overview_svg",
+                )
+            plt.close(fig_overview)
 
         # ---- Empirical-null companion violins ----
         if _empirical_null_active and "z_empirical" in aucell_per_cluster_df.columns:
