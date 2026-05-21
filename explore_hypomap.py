@@ -187,9 +187,9 @@ def main(path):
                 mean_lognorm=("norm", "mean"),
                 frac_expressing=("expr", "mean"),
             )
-            g = g[g["n_cells"] >= 10].sort_values("mean_lognorm", ascending=False)
+            g = g[g["n_cells"] >= 20].sort_values("mean_lognorm", ascending=False)
             print(f"\n--- {tag} (n={n_sel:,} cells) — clusters by mean Pnoc, "
-                  f">=10 cells ---")
+                  f">=20 cells ---")
             print(g.head(25).round(3))
 
     print("\nDone. backed mode used; nothing was modified.")
