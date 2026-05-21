@@ -674,24 +674,23 @@ def _draw_gene_poa_panels(
 
     _draw_cluster_scatter(ax_clusters, umap_coords, cell_labels, highlight,
                           color_map, point_size, select_mask=region_mask)
-    ax_clusters.set_title(f"Top {gene_name} clusters ({region_label})")
     handles = [
         plt.Line2D([0], [0], marker="o", color="w",
-                   markerfacecolor=color_map[cl], markersize=3.5, label=cl)
+                   markerfacecolor=color_map[cl], markersize=4, label=cl)
         for cl in highlight
     ]
     handles.append(plt.Line2D([0], [0], marker="o", color="w",
-                              markerfacecolor=UMAP_OTHER_COLOR, markersize=3.5,
+                              markerfacecolor=UMAP_OTHER_COLOR, markersize=4,
                               label="Other"))
     if legend_loc == "right":
         ax_clusters.legend(handles=handles, loc="center left",
-                           bbox_to_anchor=(1.02, 0.5), fontsize=4.5,
+                           bbox_to_anchor=(1.02, 0.5), fontsize=6,
                            frameon=False, ncol=1, handletextpad=0.3,
                            labelspacing=0.3, borderaxespad=0)
     else:
         ncol = 2 if len(handles) <= 8 else 3
         ax_clusters.legend(handles=handles, loc="upper center",
-                           bbox_to_anchor=(0.5, -0.02), fontsize=4.5,
+                           bbox_to_anchor=(0.5, -0.02), fontsize=6,
                            frameon=False, ncol=ncol, handletextpad=0.3,
                            columnspacing=0.5, labelspacing=0.35)
 
@@ -699,7 +698,6 @@ def _draw_gene_poa_panels(
         ax_expr, umap_coords, gene_expr, region_mask & expressing_mask,
         point_size,
     )
-    ax_expr.set_title(f"{gene_name} expression ({region_label})")
     cbar = ax_expr.figure.colorbar(sc, cax=cax)
     cbar.set_label(f"{gene_name} (log-norm)", fontsize=6)
     cbar.ax.tick_params(labelsize=5)
@@ -843,7 +841,7 @@ def figure_pnoc_overview(
     # cols: [panel][legend gap][panel][colorbar / right-label gap]
     fig = plt.figure(figsize=(2.7 * panel_w, 2 * panel_w * 0.95))
     gs = fig.add_gridspec(
-        2, 4, width_ratios=[1, 0.5, 1, 0.13], height_ratios=[1, 1],
+        2, 4, width_ratios=[1, 0.5, 1, 0.06], height_ratios=[1, 1],
         wspace=0.08, hspace=0.3,
     )
     ax_f2c = fig.add_subplot(gs[0, 0])
@@ -869,24 +867,22 @@ def figure_pnoc_overview(
     ct_palette = get_qualitative_palette(max(len(ct_high), 1))
     ct_cmap = {cl: ct_palette[i % len(ct_palette)] for i, cl in enumerate(ct_high)}
     _draw_cluster_scatter(ax_ct, umap, labels, ct_high, ct_cmap, point_size)
-    ax_ct.set_title("Cell-type annotation (top AUCell clusters)")
     handles = [
         plt.Line2D([0], [0], marker="o", color="w",
-                   markerfacecolor=ct_cmap[cl], markersize=3.5, label=cl)
+                   markerfacecolor=ct_cmap[cl], markersize=4, label=cl)
         for cl in ct_high
     ]
     handles.append(plt.Line2D([0], [0], marker="o", color="w",
-                              markerfacecolor=UMAP_OTHER_COLOR, markersize=3.5,
+                              markerfacecolor=UMAP_OTHER_COLOR, markersize=4,
                               label="Other"))
     ax_ct.legend(handles=handles, loc="center left", bbox_to_anchor=(1.02, 0.5),
-                 fontsize=4, frameon=False, ncol=1, handletextpad=0.3,
+                 fontsize=6, frameon=False, ncol=1, handletextpad=0.3,
                  labelspacing=0.3, borderaxespad=0)
 
     # --- bottom-right: fig_1c AUCell violins (labels on the right) ---
     _draw_aucell_violins(ax_vio, aucell_scores, view_labels, top_n=violin_top_n,
                          min_cluster_cells=violin_min_cluster_cells,
                          allowed_clusters=violin_allowed_clusters)
-    ax_vio.set_title("AUCell score per cluster")
     ax_vio.yaxis.tick_right()
     ax_vio.yaxis.set_label_position("right")
 
