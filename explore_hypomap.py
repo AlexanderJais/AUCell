@@ -45,9 +45,9 @@ def find_gene(adata, symbol):
         hit = np.where(np.char.lower(names) == sym)[0]
         if len(hit):
             return (where, int(hit[0]), names[hit[0]], "var_names")
-        # fall back to symbol columns
-        for col in ("gene_name", "gene_symbol", "symbol",
-                    "external_gene_name", "features", "Gene"):
+        # fall back to symbol columns (CELLxGENE uses 'feature_name')
+        for col in ("feature_name", "gene_name", "gene_symbol", "symbol",
+                    "external_gene_name", "features", "Gene", "feature_id"):
             if var_df is not None and col in var_df.columns:
                 colvals = var_df[col].astype(str).str.lower().values
                 hit = np.where(colvals == sym)[0]
@@ -95,10 +95,36 @@ def main(path):
         print([c for c in adata.obs.columns if "region" in c.lower()
                or "area" in c.lower() or "nucleus" in c.lower()])
 
+    # var columns (where do gene symbols live?) --------------------------
+    print("\n--- var.columns ---")
+    print(list(adata.var.columns))
+    print("var_names sample:", list(adata.var_names[:5]))
+    if adata.raw is not None:
+        print("--- raw.var.columns ---")
+        print(list(adata.raw.var.columns))
+        print("raw.var_names sample:", list(adata.raw.var_names[:5]))
+
     # Pnoc gene ----------------------------------------------------------
     print("\n--- Pnoc gene lookup ---")
     hit = find_gene(adata, "Pnoc")
-    print("Pnoc ->", hit if hit else "NOT FOUND (try 'PNOC' / Ensembl ENSMUSG...)")
+    print("Pnoc ->", hit if hit else "NOT FOUND")
+    if hit is None:
+        # brute-force substring scan across index + every var column
+        print("Substring scan for 'pnoc' across var index and columns:")
+        for where, vn, vdf in (("var", adata.var_names, adata.var),
+                               ("raw", adata.raw.var_names if adata.raw is not None else [],
+                                adata.raw.var if adata.raw is not None else None)):
+            idx_hits = [str(v) for v in vn if "pnoc" in str(v).lower()]
+            if idx_hits:
+                print(f"  {where}.var_names contains: {idx_hits[:10]}")
+            if vdf is not None:
+                for col in vdf.columns:
+                    try:
+                        m = vdf[col].astype(str).str.lower().str.contains("pnoc", na=False)
+                        if m.any():
+                            print(f"  {where}.var['{col}']: {vdf[col][m].head(5).tolist()}")
+                    except Exception:
+                        pass
 
     # Pnoc-named clusters + their regions --------------------------------
     ann = "C185_named" if "C185_named" in adata.obs.columns else (
