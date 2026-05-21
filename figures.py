@@ -850,26 +850,29 @@ def figure_pnoc_overview(
     ax_ct = fig.add_subplot(gs[1, 0])
     ax_vio = fig.add_subplot(gs[1, 2])
 
+    present = set(np.unique(labels).tolist())
+    f2_high = [c for c in fig2_highlight if c in present]
+    ct_high = [c for c in ct_highlight if c in present]
+
+    # Shared colour map over the UNION of both cluster panels, so a cluster
+    # that appears in both the Pnoc panel and the AUCell panel gets the SAME
+    # colour. Order: Pnoc clusters first, then any AUCell-only clusters.
+    union = list(f2_high) + [c for c in ct_high if c not in set(f2_high)]
+    palette = get_qualitative_palette(max(len(union), 1))
+    shared_cmap = {cl: palette[i % len(palette)] for i, cl in enumerate(union)}
+
     # --- top row: Figure 2 panels (cluster legend to the RIGHT, into col 1) ---
-    f2_high = [c for c in fig2_highlight
-               if c in set(np.unique(labels).tolist())]
-    f2_palette = get_qualitative_palette(max(len(f2_high), 1))
-    f2_cmap = {cl: f2_palette[i % len(f2_palette)] for i, cl in enumerate(f2_high)}
     _draw_gene_poa_panels(
         ax_f2c, ax_f2e, cax, umap, labels, region, expr, expressing,
-        f2_high, f2_cmap, point_size, gene_name, region_label,
+        f2_high, shared_cmap, point_size, gene_name, region_label,
         legend_loc="right",
     )
 
     # --- bottom-left: same backdrop, top AUCell clusters coloured ---
-    ct_high = [c for c in ct_highlight
-               if c in set(np.unique(labels).tolist())]
-    ct_palette = get_qualitative_palette(max(len(ct_high), 1))
-    ct_cmap = {cl: ct_palette[i % len(ct_palette)] for i, cl in enumerate(ct_high)}
-    _draw_cluster_scatter(ax_ct, umap, labels, ct_high, ct_cmap, point_size)
+    _draw_cluster_scatter(ax_ct, umap, labels, ct_high, shared_cmap, point_size)
     handles = [
         plt.Line2D([0], [0], marker="o", color="w",
-                   markerfacecolor=ct_cmap[cl], markersize=4, label=cl)
+                   markerfacecolor=shared_cmap[cl], markersize=4, label=cl)
         for cl in ct_high
     ]
     handles.append(plt.Line2D([0], [0], marker="o", color="w",
