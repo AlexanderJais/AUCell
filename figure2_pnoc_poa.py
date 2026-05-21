@@ -59,7 +59,8 @@ def qualitative_palette(n):
 def add_umap_axis_arrows(ax, length=0.07, origin=(0.02, 0.02)):
     x0, y0 = origin
     style = dict(arrowstyle="-|>,head_length=1.5,head_width=1.0",
-                 linewidth=0.5, color="black", shrinkA=0, shrinkB=0)
+                 linewidth=0.5, color="black", shrinkA=0, shrinkB=0,
+                 mutation_scale=5)
     ax.annotate("", xy=(x0 + length, y0), xytext=(x0, y0),
                 xycoords="axes fraction", textcoords="axes fraction",
                 arrowprops=style)
@@ -154,16 +155,20 @@ def main(h5ad_path, out_dir=".", top_n=DEFAULT_TOP_N):
                fontsize=4.5, frameon=False, ncol=2, handletextpad=0.2,
                columnspacing=0.5, labelspacing=0.3)
 
-    # right: full atlas grey, Pnoc expression overlaid for preoptic cells
+    # right: full atlas grey, Pnoc expression overlaid for expressing
+    # preoptic cells only (non-expressing preoptic cells join the grey
+    # backdrop so the panel shows where Pnoc actually is, not a field of
+    # black zeros from magma's low end).
     ax2.scatter(umap[:, 0], umap[:, 1], c=other, s=1.5, alpha=0.4,
                 edgecolors="none", rasterized=True)
-    ex_poa = expr[poa]
-    vmax = float(np.nanpercentile(ex_poa, 98)) or 1.0
-    # draw expressing cells last so they sit on top of the grey + low-expr
-    o = np.argsort(ex_poa)
-    sc_h = ax2.scatter(umap[poa][o, 0], umap[poa][o, 1], c=ex_poa[o],
-                       cmap="magma", s=4.0, alpha=0.9, edgecolors="none",
-                       rasterized=True, vmin=0.0, vmax=vmax)
+    expressing = poa & (col > 0)
+    ex_e = expr[expressing]
+    vmax = float(np.nanpercentile(ex_e, 98)) or 1.0
+    o = np.argsort(ex_e)               # draw brightest last
+    sc_h = ax2.scatter(umap[expressing][o, 0], umap[expressing][o, 1],
+                       c=ex_e[o], cmap="magma", s=4.0, alpha=0.9,
+                       edgecolors="none", rasterized=True,
+                       vmin=0.0, vmax=vmax)
     ax2.set_title(f"{GENE} expression (preoptic)")
     ax2.set_xticks([]); ax2.set_yticks([])
     for s in ax2.spines.values():
