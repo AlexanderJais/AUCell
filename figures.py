@@ -887,7 +887,7 @@ def figure_pnoc_overview(
     gene_panel_clusters = f2_high[:gene_panel_top_n]
     _draw_gene_cluster_dotplot(
         ax_gvio, full_expr, full_expressing, full_labels, full_region,
-        gene_panel_clusters, gene_name,
+        gene_panel_clusters, gene_name, shared_cmap,
     )
 
     # --- row 2 right: cell-type UMAP, top AUCell clusters coloured ---
@@ -1104,32 +1104,27 @@ def _draw_aucell_violins(ax, aucell_scores, cell_labels, top_n=15,
 
 
 def _draw_gene_cluster_dotplot(ax, expr, expressing, cell_labels, region_mask,
-                               clusters, gene_name, cmap="magma",
+                               clusters, gene_name, color_map,
                                size_scale=320.0, size_floor=10.0):
     """Single-gene dot plot for the given *clusters* (region cells only), drawn
     onto *ax*: one row per cluster, dot SIZE = fraction of cells expressing the
-    gene (raw count > 0), dot COLOUR = mean log-norm expression among the
-    expressing cells. The standard sparse-gene summary — robust to the
-    zero-inflation that makes violins of a sparse gene uninformative.
+    gene (raw count > 0), dot COLOUR = the cluster's colour from *color_map*
+    (the shared composite palette). The standard sparse-gene summary — robust to
+    the zero-inflation that makes violins of a sparse gene uninformative.
 
-    Adds its own colorbar (mean expression) and a size legend (% expressing)
-    just to the right of the panel. Clusters keep the order supplied (highest
-    first at the top)."""
+    Adds a size legend (% expressing) just to the right of the panel. Clusters
+    keep the order supplied (highest first at the top)."""
     region_mask = np.asarray(region_mask, dtype=bool)
     cell_labels = np.asarray(cell_labels)
-    expr = np.asarray(expr, dtype=float)
     expressing = np.asarray(expressing, dtype=bool)
 
-    fracs, means, used = [], [], []
+    fracs, used = [], []
     for cl in clusters:
         m = region_mask & (cell_labels == cl)
         n = int(m.sum())
         if n < 1:
             continue
-        e = m & expressing
-        ne = int(e.sum())
-        fracs.append(ne / n)
-        means.append(float(expr[e].mean()) if ne > 0 else 0.0)
+        fracs.append(int((m & expressing).sum()) / n)
         used.append(cl)
     if not used:
         ax.text(0.5, 0.5, "No data available", ha="center", va="center",
@@ -1138,9 +1133,9 @@ def _draw_gene_cluster_dotplot(ax, expr, expressing, cell_labels, region_mask,
 
     y = list(range(len(used)))
     sizes = [f * size_scale + size_floor for f in fracs]
-    vmax = max(means) or 1.0
-    sc = ax.scatter([0] * len(used), y, s=sizes, c=means, cmap=cmap,
-                    vmin=0.0, vmax=vmax, edgecolors="grey", linewidths=0.3)
+    colors = [color_map.get(cl, "#888888") for cl in used]
+    ax.scatter([0] * len(used), y, s=sizes, c=colors,
+               edgecolors="grey", linewidths=0.3)
     ax.set_yticks(y)
     ax.set_yticklabels(used, fontsize=6)
     ax.set_xticks([0])
@@ -1150,15 +1145,10 @@ def _draw_gene_cluster_dotplot(ax, expr, expressing, cell_labels, region_mask,
     for side in ("top", "right", "bottom"):
         ax.spines[side].set_visible(False)
 
-    cbar_ax = ax.inset_axes([1.06, 0.0, 0.05, 1.0])
-    cbar = ax.figure.colorbar(sc, cax=cbar_ax)
-    cbar.set_label(f"mean {gene_name}\n(log-norm, expr.)", fontsize=5)
-    cbar.ax.tick_params(labelsize=5)
-
     for f in (0.05, 0.15, 0.25):
         ax.scatter([], [], s=f * size_scale + size_floor, c="lightgrey",
                    edgecolors="grey", linewidths=0.3, label=f"{int(f * 100)}%")
-    ax.legend(loc="center left", bbox_to_anchor=(1.35, 0.5), fontsize=5,
+    ax.legend(loc="center left", bbox_to_anchor=(1.05, 0.5), fontsize=5,
               frameon=False, title=f"% {gene_name}+", title_fontsize=5,
               labelspacing=0.9, handletextpad=0.4, borderaxespad=0)
     return sc
