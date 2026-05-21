@@ -81,7 +81,7 @@ def gene_poa_inputs(
     region_mask: np.ndarray,
     cell_labels: np.ndarray,
     min_cells: int = 20,
-    top_n: int = 6,
+    top_n: int = 20,
     threshold: float = 0.0,
 ):
     """Compute the per-cell expression, expressing mask, ranking and highlight
@@ -96,7 +96,10 @@ def gene_poa_inputs(
     ranking : DataFrame indexed by cluster (region cells, >= ``min_cells``),
         columns n_cells / mean_lognorm / frac_expressing, sorted descending.
     highlight : list[str]
-        Top ``top_n`` clusters by mean expression within the region.
+        All region clusters with **detectable** expression (frac_expressing >
+        0), capped at ``top_n``. This is the set of POA-resident Pnoc-positive
+        clusters shown in the paper (Table S1) — every preoptic sub-region
+        (MPA, LPO, periventricular), not just the top few by mean.
     """
     col = _dense_column(adata, gene_idx, use_raw)
     depth = np.asarray(adata.obs["nCount_RNA"], dtype=float)
@@ -117,5 +120,6 @@ def gene_poa_inputs(
                       frac_expressing=("frac", "mean")))
     ranking = ranking[ranking["n_cells"] >= min_cells].sort_values(
         "mean_lognorm", ascending=False)
-    highlight = ranking.head(top_n).index.tolist()
+    detectable = ranking[ranking["frac_expressing"] > 0]
+    highlight = detectable.head(top_n).index.tolist()
     return expr, expressing, ranking, highlight

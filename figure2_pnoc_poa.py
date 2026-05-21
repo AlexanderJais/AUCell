@@ -34,7 +34,7 @@ ANNOTATION_COL = "C185_named"
 POA_KEYWORDS = ("preoptic",)
 REGION_LABEL = "preoptic"
 MIN_CELLS = 20
-DEFAULT_TOP_N = 6
+DEFAULT_TOP_N = 20  # show all POA-resident Pnoc+ clusters (Table S1), capped
 SUBSAMPLE = 50000  # backdrop density; matches the app's umap_subsample default
 
 

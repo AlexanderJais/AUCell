@@ -1789,8 +1789,10 @@ if run_button or st.session_state.analysis_done:
         FIG2_MIN_CELLS = 20
         st.subheader(f"Figure 2: {FIG2_GENE} expression across the preoptic area")
         _fig2_top_n = st.number_input(
-            "Clusters to highlight (top N by mean expression in region)",
-            min_value=1, max_value=20, value=6, step=1, key="fig2_top_n",
+            "Max POA Pnoc-expressing clusters to highlight",
+            min_value=1, max_value=25, value=20, step=1, key="fig2_top_n",
+            help="All preoptic clusters with detectable Pnoc (Table S1) are "
+                 "highlighted, up to this many.",
         )
         _fig2_hit = resolve_gene_index(adata, FIG2_GENE)
         _fig2_ready = False
@@ -1819,13 +1821,14 @@ if run_button or st.session_state.analysis_done:
                     adata.n_obs, size=umap_subsample, replace=False))
             st.markdown(
                 f"**Figure 2.** Full-atlas UMAP (same layout as 1a). "
-                f"**Left:** the {int(_fig2_top_n)} preoptic clusters with the "
-                f"highest mean *{FIG2_GENE}* expression (CP10k log1p, "
-                f"≥ {FIG2_MIN_CELLS} cells) drawn in colour over a light-grey "
-                f"backdrop of all atlas cells. **Right:** *{FIG2_GENE}* "
-                f"expression of the preoptic cells (non-expressing cells join "
-                f"the grey backdrop). Preoptic = `Region_summarized` containing "
-                f"'{FIG2_KEYWORDS[0]}' "
+                f"**Left:** the {len(_fig2_highlight)} preoptic clusters with "
+                f"detectable *{FIG2_GENE}* (≥ {FIG2_MIN_CELLS} cells; the "
+                f"POA-resident {FIG2_GENE}-positive clusters of Table S1, "
+                f"spanning MPA / LPO / periventricular) drawn in colour over a "
+                f"light-grey backdrop of all atlas cells. **Right:** "
+                f"*{FIG2_GENE}* expression of the preoptic cells (non-expressing "
+                f"cells join the grey backdrop). Preoptic = `Region_summarized` "
+                f"containing '{FIG2_KEYWORDS[0]}' "
                 f"(n = {int(_fig2_region.sum()):,} cells)."
             )
             fig_2 = figure_gene_poa_umap(
