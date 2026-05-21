@@ -113,12 +113,10 @@ def main(h5ad_path, out_dir=".", top_n=DEFAULT_TOP_N):
     umap = np.asarray(adata.obsm["X_umap"])
 
     poa = regions.str.contains(POA_KEYWORD, case=False, na=False).values
-    print(f"Preoptic cells: {int(poa.sum()):,}")
-
-    u, lab, ex = umap[poa], labels[poa], expr[poa]
+    print(f"Preoptic cells: {int(poa.sum()):,} / {len(poa):,} total")
 
     # Rank clusters by mean Pnoc within the preoptic area (>=MIN_CELLS).
-    df = pd.DataFrame({"cluster": lab, "expr": ex,
+    df = pd.DataFrame({"cluster": labels[poa], "expr": expr[poa],
                        "frac": (col[poa] > 0).astype(float)})
     g = (df.groupby("cluster")
            .agg(n_cells=("expr", "size"), mean_lognorm=("expr", "mean"),
@@ -128,27 +126,21 @@ def main(h5ad_path, out_dir=".", top_n=DEFAULT_TOP_N):
     highlight = g.head(top_n).index.tolist()
     print(f"Highlighting top {top_n} clusters:\n", g.head(top_n).round(3))
 
-    # --- figure: two panels ------------------------------------------------
+    # --- figure: two panels, full-atlas grey backdrop (fig_1a style) -------
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.2, 3.6),
                                    gridspec_kw={"wspace": 0.6})
+    other = "#d9d9d9"
 
-    # shuffle for fair overplotting
-    rng = np.random.default_rng(0)
-    order = rng.permutation(len(u))
-    u, lab, ex = u[order], lab[order], ex[order]
-
-    # left: cluster identity (highlight top Pnoc clusters)
+    # left: full atlas grey, top Pnoc clusters (preoptic subset) coloured
+    ax1.scatter(umap[:, 0], umap[:, 1], c=other, s=1.5, alpha=0.4,
+                edgecolors="none", rasterized=True)
     palette = qualitative_palette(len(highlight))
     cmap_cl = {cl: palette[i] for i, cl in enumerate(highlight)}
-    other = "#d9d9d9"
-    is_other = ~np.isin(lab, highlight)
-    ax1.scatter(u[is_other, 0], u[is_other, 1], c=other, s=2.0, alpha=0.4,
-                edgecolors="none", rasterized=True)
     for cl in highlight:
-        m = lab == cl
-        ax1.scatter(u[m, 0], u[m, 1], c=[cmap_cl[cl]], s=5.0, alpha=0.95,
+        m = poa & (labels == cl)          # only the preoptic cells of the cluster
+        ax1.scatter(umap[m, 0], umap[m, 1], c=[cmap_cl[cl]], s=5.0, alpha=0.95,
                     edgecolors="none", rasterized=True)
-    ax1.set_title("Preoptic clusters (top Pnoc)")
+    ax1.set_title("Top Pnoc clusters (preoptic)")
     ax1.set_xticks([]); ax1.set_yticks([])
     for s in ax1.spines.values():
         s.set_visible(False)
@@ -157,16 +149,21 @@ def main(h5ad_path, out_dir=".", top_n=DEFAULT_TOP_N):
                           markerfacecolor=cmap_cl[cl], markersize=3.5, label=cl)
                for cl in highlight]
     handles.append(plt.Line2D([0], [0], marker="o", color="w",
-                              markerfacecolor=other, markersize=3.5,
-                              label="Other preoptic"))
+                              markerfacecolor=other, markersize=3.5, label="Other"))
     ax1.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.02),
                fontsize=4.5, frameon=False, ncol=2, handletextpad=0.2,
                columnspacing=0.5, labelspacing=0.3)
 
-    # right: Pnoc expression
-    vmax = float(np.nanpercentile(ex, 98)) or 1.0
-    sc_h = ax2.scatter(u[:, 0], u[:, 1], c=ex, cmap="magma", s=2.5, alpha=0.85,
-                       edgecolors="none", rasterized=True, vmin=0.0, vmax=vmax)
+    # right: full atlas grey, Pnoc expression overlaid for preoptic cells
+    ax2.scatter(umap[:, 0], umap[:, 1], c=other, s=1.5, alpha=0.4,
+                edgecolors="none", rasterized=True)
+    ex_poa = expr[poa]
+    vmax = float(np.nanpercentile(ex_poa, 98)) or 1.0
+    # draw expressing cells last so they sit on top of the grey + low-expr
+    o = np.argsort(ex_poa)
+    sc_h = ax2.scatter(umap[poa][o, 0], umap[poa][o, 1], c=ex_poa[o],
+                       cmap="magma", s=4.0, alpha=0.9, edgecolors="none",
+                       rasterized=True, vmin=0.0, vmax=vmax)
     ax2.set_title(f"{GENE} expression (preoptic)")
     ax2.set_xticks([]); ax2.set_yticks([])
     for s in ax2.spines.values():
