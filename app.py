@@ -2020,18 +2020,15 @@ if run_button or st.session_state.analysis_done:
                 fig2_expressing_mask=_fig2_expressing,
                 fig2_highlight=_fig2_highlight,
                 fig2_subsample_idx=_fig2_sub,
-                view_umap=umap_coords,
-                view_labels=cell_labels,
                 ct_highlight=_top15_aucell_clusters_ct,
-                view_subsample_idx=sub_indices,
                 aucell_scores=aucell_scores,
+                view_labels=cell_labels,
                 gene_name=FIG2_GENE,
                 region_label=FIG2_REGION_LABEL,
                 double_column=double_column,
                 violin_top_n=15,
                 violin_min_cluster_cells=min_cells_for_rank,
                 violin_allowed_clusters=_aucell_allowed,
-                seed=int(empirical_null_seed),
             )
             st.pyplot(fig_overview)
             _cache_fig("fig_pnoc_overview", fig_overview)

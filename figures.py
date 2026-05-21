@@ -662,11 +662,13 @@ def figure_celltype_umap(
 def _draw_gene_poa_panels(
     ax_clusters, ax_expr, cax, umap_coords, cell_labels, region_mask,
     gene_expr, expressing_mask, highlight, color_map, point_size,
-    gene_name, region_label,
+    gene_name, region_label, legend_loc="below",
 ):
     """Draw the two Figure-2 panels (cluster identity + expression) onto the
     supplied axes, with the colorbar in *cax*. Shared by figure_gene_poa_umap
-    and figure_pnoc_overview so the panels are identical."""
+    and figure_pnoc_overview so the panels are identical. *legend_loc* is
+    "below" (single figure) or "right" (composite, legend goes into the gap
+    column to the right of the cluster panel)."""
     region_mask = np.asarray(region_mask, dtype=bool)
     expressing_mask = np.asarray(expressing_mask, dtype=bool)
 
@@ -681,11 +683,17 @@ def _draw_gene_poa_panels(
     handles.append(plt.Line2D([0], [0], marker="o", color="w",
                               markerfacecolor=UMAP_OTHER_COLOR, markersize=3.5,
                               label="Other"))
-    ncol = 2 if len(handles) <= 8 else 3
-    ax_clusters.legend(handles=handles, loc="upper center",
-                       bbox_to_anchor=(0.5, -0.02), fontsize=4.5, frameon=False,
-                       ncol=ncol, handletextpad=0.3, columnspacing=0.5,
-                       labelspacing=0.35)
+    if legend_loc == "right":
+        ax_clusters.legend(handles=handles, loc="center left",
+                           bbox_to_anchor=(1.02, 0.5), fontsize=4.5,
+                           frameon=False, ncol=1, handletextpad=0.3,
+                           labelspacing=0.3, borderaxespad=0)
+    else:
+        ncol = 2 if len(handles) <= 8 else 3
+        ax_clusters.legend(handles=handles, loc="upper center",
+                           bbox_to_anchor=(0.5, -0.02), fontsize=4.5,
+                           frameon=False, ncol=ncol, handletextpad=0.3,
+                           columnspacing=0.5, labelspacing=0.35)
 
     sc = _draw_expression_scatter(
         ax_expr, umap_coords, gene_expr, region_mask & expressing_mask,
@@ -783,20 +791,17 @@ def figure_pnoc_overview(
     fig2_gene_expr: np.ndarray,
     fig2_expressing_mask: np.ndarray,
     fig2_highlight: List[str],
-    view_umap: np.ndarray,
-    view_labels: np.ndarray,
     ct_highlight: List[str],
     aucell_scores: np.ndarray,
+    view_labels: np.ndarray,
     gene_name: str = "Pnoc",
     region_label: str = "preoptic",
     double_column: bool = True,
     point_size: float = 0.3,
     fig2_subsample_idx: Optional[np.ndarray] = None,
-    view_subsample_idx: Optional[np.ndarray] = None,
     violin_top_n: int = 15,
     violin_min_cluster_cells: int = 20,
     violin_allowed_clusters: Optional[Iterable[str]] = None,
-    seed: int = 0,
 ) -> plt.Figure:
     """Four-panel composite, all panels equal-sized:
 
@@ -805,65 +810,65 @@ def figure_pnoc_overview(
         bottom-left  fig_1a       — cell-type UMAP, top AUCell clusters
         bottom-right fig_1c       — AUCell-score violins for those clusters
 
-    Every panel is drawn with the same shared helpers used by the standalone
-    figures (`_draw_gene_poa_panels`, `_draw_cluster_scatter`,
-    `_draw_aucell_violins`), so the composite panels are identical to the
-    individual figures.
+    Every panel is drawn with the shared helpers used by the standalone
+    figures, so the panels are identical to the individual figures.
 
-    The top row uses **full-atlas** arrays (Figure 2); the bottom-left uses the
-    analysis **view** arrays (same as fig_1a). Violins use all view cells (no
-    subsample), matching fig_1c.
+    **All three UMAP panels share one identical grey backdrop**: the full
+    atlas (the Figure 2 arrays), subsampled by *fig2_subsample_idx*. The
+    bottom-left additionally colours the top-AUCell clusters' cells on that
+    same backdrop. (We deliberately do NOT use the analysis view here — when
+    a region restriction is active the view drops atlas cells, which made the
+    bottom backdrop differ from the top.) The violins use all view cells
+    (`aucell_scores` / `view_labels`), matching fig_1c.
+
+    Legends sit in their own columns and the violin labels on the right, so
+    nothing overlaps across rows.
     """
     setup_nature_style()
 
-    # --- subsample copies (don't mutate caller arrays) ---
-    f2_umap, f2_labels = fig2_umap, np.asarray(fig2_labels)
-    f2_region = np.asarray(fig2_region_mask, dtype=bool)
-    f2_expr = np.asarray(fig2_gene_expr, dtype=float)
-    f2_expressing = np.asarray(fig2_expressing_mask, dtype=bool)
+    # Shared full-atlas backdrop arrays (subsample once, reuse for every panel).
+    umap = fig2_umap
+    labels = np.asarray(fig2_labels)
+    region = np.asarray(fig2_region_mask, dtype=bool)
+    expr = np.asarray(fig2_gene_expr, dtype=float)
+    expressing = np.asarray(fig2_expressing_mask, dtype=bool)
     if fig2_subsample_idx is not None:
-        f2_umap = f2_umap[fig2_subsample_idx]
-        f2_labels = f2_labels[fig2_subsample_idx]
-        f2_region = f2_region[fig2_subsample_idx]
-        f2_expr = f2_expr[fig2_subsample_idx]
-        f2_expressing = f2_expressing[fig2_subsample_idx]
-
-    ct_umap, ct_labels = view_umap, np.asarray(view_labels)
-    if view_subsample_idx is not None:
-        ct_umap = ct_umap[view_subsample_idx]
-        ct_labels = ct_labels[view_subsample_idx]
-    rng = np.random.default_rng(int(seed))
-    order = rng.permutation(len(ct_umap))
-    ct_umap, ct_labels = ct_umap[order], ct_labels[order]
+        umap = umap[fig2_subsample_idx]
+        labels = labels[fig2_subsample_idx]
+        region = region[fig2_subsample_idx]
+        expr = expr[fig2_subsample_idx]
+        expressing = expressing[fig2_subsample_idx]
 
     panel_w = get_figure_width(double_column)
-    fig = plt.figure(figsize=(2 * panel_w + 0.6, 2 * panel_w * 0.95))
+    # cols: [panel][legend gap][panel][colorbar / right-label gap]
+    fig = plt.figure(figsize=(2.7 * panel_w, 2 * panel_w * 0.95))
     gs = fig.add_gridspec(
-        2, 3, width_ratios=[1, 1, 0.045], height_ratios=[1, 1],
-        wspace=0.3, hspace=0.55,
+        2, 4, width_ratios=[1, 0.5, 1, 0.13], height_ratios=[1, 1],
+        wspace=0.08, hspace=0.3,
     )
     ax_f2c = fig.add_subplot(gs[0, 0])
-    ax_f2e = fig.add_subplot(gs[0, 1])
-    cax = fig.add_subplot(gs[0, 2])
+    ax_f2e = fig.add_subplot(gs[0, 2])
+    cax = fig.add_subplot(gs[0, 3])
     ax_ct = fig.add_subplot(gs[1, 0])
-    ax_vio = fig.add_subplot(gs[1, 1])
+    ax_vio = fig.add_subplot(gs[1, 2])
 
-    # --- top row: Figure 2 panels ---
+    # --- top row: Figure 2 panels (cluster legend to the RIGHT, into col 1) ---
     f2_high = [c for c in fig2_highlight
-               if c in set(np.unique(f2_labels).tolist())]
+               if c in set(np.unique(labels).tolist())]
     f2_palette = get_qualitative_palette(max(len(f2_high), 1))
     f2_cmap = {cl: f2_palette[i % len(f2_palette)] for i, cl in enumerate(f2_high)}
     _draw_gene_poa_panels(
-        ax_f2c, ax_f2e, cax, f2_umap, f2_labels, f2_region, f2_expr,
-        f2_expressing, f2_high, f2_cmap, point_size, gene_name, region_label,
+        ax_f2c, ax_f2e, cax, umap, labels, region, expr, expressing,
+        f2_high, f2_cmap, point_size, gene_name, region_label,
+        legend_loc="right",
     )
 
-    # --- bottom-left: fig_1a cell-type UMAP (top AUCell clusters) ---
+    # --- bottom-left: same backdrop, top AUCell clusters coloured ---
     ct_high = [c for c in ct_highlight
-               if c in set(np.unique(ct_labels).tolist())]
+               if c in set(np.unique(labels).tolist())]
     ct_palette = get_qualitative_palette(max(len(ct_high), 1))
     ct_cmap = {cl: ct_palette[i % len(ct_palette)] for i, cl in enumerate(ct_high)}
-    _draw_cluster_scatter(ax_ct, ct_umap, ct_labels, ct_high, ct_cmap, point_size)
+    _draw_cluster_scatter(ax_ct, umap, labels, ct_high, ct_cmap, point_size)
     ax_ct.set_title("Cell-type annotation (top AUCell clusters)")
     handles = [
         plt.Line2D([0], [0], marker="o", color="w",
@@ -873,15 +878,17 @@ def figure_pnoc_overview(
     handles.append(plt.Line2D([0], [0], marker="o", color="w",
                               markerfacecolor=UMAP_OTHER_COLOR, markersize=3.5,
                               label="Other"))
-    ax_ct.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.02),
-                 fontsize=4, frameon=False, ncol=3, handletextpad=0.3,
-                 columnspacing=0.5, labelspacing=0.3)
+    ax_ct.legend(handles=handles, loc="center left", bbox_to_anchor=(1.02, 0.5),
+                 fontsize=4, frameon=False, ncol=1, handletextpad=0.3,
+                 labelspacing=0.3, borderaxespad=0)
 
-    # --- bottom-right: fig_1c AUCell violins ---
+    # --- bottom-right: fig_1c AUCell violins (labels on the right) ---
     _draw_aucell_violins(ax_vio, aucell_scores, view_labels, top_n=violin_top_n,
                          min_cluster_cells=violin_min_cluster_cells,
                          allowed_clusters=violin_allowed_clusters)
     ax_vio.set_title("AUCell score per cluster")
+    ax_vio.yaxis.tick_right()
+    ax_vio.yaxis.set_label_position("right")
 
     logger.info("figure_pnoc_overview: gene=%s, %d Fig2 clusters, %d AUCell clusters",
                 gene_name, len(f2_high), len(ct_high))
