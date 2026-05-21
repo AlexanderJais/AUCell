@@ -797,11 +797,16 @@ def figure_pnoc_overview(
     double_column: bool = True,
     point_size: float = 0.3,
     fig2_subsample_idx: Optional[np.ndarray] = None,
+    pnoc_violin_top_n: int = 10,
     violin_top_n: int = 15,
     violin_min_cluster_cells: int = 20,
     violin_allowed_clusters: Optional[Iterable[str]] = None,
 ) -> plt.Figure:
-    """Four-panel composite, all panels equal-sized:
+    """Five-panel composite, all panels equal-sized:
+
+        row 1: gene clusters UMAP        | gene expression UMAP (+ colorbar)
+        row 2: gene expression violins   | cell-type UMAP (top AUCell clusters)
+        row 3: AUCell-score violins      | (empty)
 
         top-left   Figure 2 left  — top `gene_name` clusters in the region
         top-right  Figure 2 right — `gene_name` expression in the region
@@ -816,19 +821,27 @@ def figure_pnoc_overview(
     bottom-left additionally colours the top-AUCell clusters' cells on that
     same backdrop. (We deliberately do NOT use the analysis view here — when
     a region restriction is active the view drops atlas cells, which made the
-    bottom backdrop differ from the top.) The violins use all view cells
-    (`aucell_scores` / `view_labels`), matching fig_1c.
+    bottom backdrop differ from the top.) The AUCell violins use all view
+    cells (`aucell_scores` / `view_labels`), matching fig_1c; the gene
+    violins use the full-atlas region cells.
 
-    Legends sit in their own columns and the violin labels on the right, so
-    nothing overlaps across rows.
+    The two gene-violin / cell-type panels and the AUCell violins are in the
+    left column; UMAP cluster legends sit to the right of their panels and
+    violin labels on the left, so nothing overlaps across rows.
     """
     setup_nature_style()
 
-    # Shared full-atlas backdrop arrays (subsample once, reuse for every panel).
+    # Full-atlas arrays. The violins use the FULL (un-subsampled) cells so the
+    # distributions are accurate; the UMAP panels use a subsampled copy for
+    # backdrop density (matching fig_1a).
+    full_labels = np.asarray(fig2_labels)
+    full_region = np.asarray(fig2_region_mask, dtype=bool)
+    full_expr = np.asarray(fig2_gene_expr, dtype=float)
+
     umap = fig2_umap
-    labels = np.asarray(fig2_labels)
-    region = np.asarray(fig2_region_mask, dtype=bool)
-    expr = np.asarray(fig2_gene_expr, dtype=float)
+    labels = full_labels
+    region = full_region
+    expr = full_expr
     expressing = np.asarray(fig2_expressing_mask, dtype=bool)
     if fig2_subsample_idx is not None:
         umap = umap[fig2_subsample_idx]
@@ -839,16 +852,17 @@ def figure_pnoc_overview(
 
     panel_w = get_figure_width(double_column)
     # cols: [panel][legend gap][panel][colorbar / right-label gap]
-    fig = plt.figure(figsize=(2.7 * panel_w, 2 * panel_w * 0.95))
+    fig = plt.figure(figsize=(2.7 * panel_w, 3 * panel_w * 0.95))
     gs = fig.add_gridspec(
-        2, 4, width_ratios=[1, 0.5, 1, 0.06], height_ratios=[1, 1],
-        wspace=0.08, hspace=0.3,
+        3, 4, width_ratios=[1, 0.5, 1, 0.06], height_ratios=[1, 1, 1],
+        wspace=0.08, hspace=0.35,
     )
-    ax_f2c = fig.add_subplot(gs[0, 0])
-    ax_f2e = fig.add_subplot(gs[0, 2])
-    cax = fig.add_subplot(gs[0, 3])
-    ax_ct = fig.add_subplot(gs[1, 0])
-    ax_vio = fig.add_subplot(gs[1, 2])
+    ax_f2c = fig.add_subplot(gs[0, 0])      # row1 L: gene clusters UMAP
+    ax_f2e = fig.add_subplot(gs[0, 2])      # row1 R: gene expression UMAP
+    cax = fig.add_subplot(gs[0, 3])         # colorbar
+    ax_gvio = fig.add_subplot(gs[1, 0])     # row2 L: gene expression violins
+    ax_ct = fig.add_subplot(gs[1, 2])       # row2 R: cell-type (AUCell) UMAP
+    ax_avio = fig.add_subplot(gs[2, 0])     # row3 L: AUCell violins
 
     present = set(np.unique(labels).tolist())
     f2_high = [c for c in fig2_highlight if c in present]
@@ -861,14 +875,21 @@ def figure_pnoc_overview(
     palette = get_qualitative_palette(max(len(union), 1))
     shared_cmap = {cl: palette[i % len(palette)] for i, cl in enumerate(union)}
 
-    # --- top row: Figure 2 panels (cluster legend to the RIGHT, into col 1) ---
+    # --- row 1: Figure 2 UMAPs (cluster legend to the RIGHT, into col 1) ---
     _draw_gene_poa_panels(
         ax_f2c, ax_f2e, cax, umap, labels, region, expr, expressing,
         f2_high, shared_cmap, point_size, gene_name, region_label,
         legend_loc="right",
     )
 
-    # --- bottom-left: same backdrop, top AUCell clusters coloured ---
+    # --- row 2 left: gene-expression violins (top-N Pnoc clusters) ---
+    gene_violin_clusters = f2_high[:pnoc_violin_top_n]
+    _draw_gene_cluster_violins(
+        ax_gvio, full_expr, full_labels, full_region, gene_violin_clusters,
+        shared_cmap, xlabel=f"{gene_name} (log-norm)",
+    )
+
+    # --- row 2 right: cell-type UMAP, top AUCell clusters coloured ---
     _draw_cluster_scatter(ax_ct, umap, labels, ct_high, shared_cmap, point_size)
     handles = [
         plt.Line2D([0], [0], marker="o", color="w",
@@ -882,12 +903,10 @@ def figure_pnoc_overview(
                  fontsize=6, frameon=False, ncol=1, handletextpad=0.3,
                  labelspacing=0.3, borderaxespad=0)
 
-    # --- bottom-right: fig_1c AUCell violins (labels on the right) ---
-    _draw_aucell_violins(ax_vio, aucell_scores, view_labels, top_n=violin_top_n,
+    # --- row 3 left: AUCell-score violins ---
+    _draw_aucell_violins(ax_avio, aucell_scores, view_labels, top_n=violin_top_n,
                          min_cluster_cells=violin_min_cluster_cells,
                          allowed_clusters=violin_allowed_clusters)
-    ax_vio.yaxis.tick_right()
-    ax_vio.yaxis.set_label_position("right")
 
     logger.info("figure_pnoc_overview: gene=%s, %d Fig2 clusters, %d AUCell clusters",
                 gene_name, len(f2_high), len(ct_high))
@@ -1081,6 +1100,44 @@ def _draw_aucell_violins(ax, aucell_scores, cell_labels, top_n=15,
     ax.tick_params(axis="x", labelsize=6)
     ax.invert_yaxis()  # highest-mean cluster at the top
     return top_clusters
+
+
+def _draw_gene_cluster_violins(ax, values, cell_labels, region_mask, clusters,
+                               color_map, xlabel):
+    """Horizontal violins of a continuous per-cell value (e.g. log-norm gene
+    expression) for the given *clusters*, using only *region_mask* cells, drawn
+    onto *ax* and coloured by *color_map* (the shared composite palette). Plain
+    violins — no individual points/replicates. Clusters are kept in the order
+    supplied (so the highest-expressing cluster sits at the top)."""
+    region_mask = np.asarray(region_mask, dtype=bool)
+    cell_labels = np.asarray(cell_labels)
+    values = np.asarray(values, dtype=float)
+
+    data, used = [], []
+    for cl in clusters:
+        m = region_mask & (cell_labels == cl)
+        if int(m.sum()) < 2:
+            continue
+        data.append(values[m])
+        used.append(cl)
+    if not data:
+        ax.text(0.5, 0.5, "No data available", ha="center", va="center",
+                transform=ax.transAxes)
+        return used
+
+    parts = ax.violinplot(data, positions=range(len(used)), vert=False,
+                          showmeans=False, showmedians=False, showextrema=False)
+    for i, body in enumerate(parts["bodies"]):
+        body.set_facecolor(color_map.get(used[i], "#888888"))
+        body.set_alpha(0.8)
+        body.set_edgecolor("grey")
+        body.set_linewidth(0.5)
+    ax.set_yticks(range(len(used)))
+    ax.set_yticklabels(used, fontsize=6)
+    ax.set_xlabel(xlabel)
+    ax.tick_params(axis="x", labelsize=6)
+    ax.invert_yaxis()  # highest-expressing cluster at the top
+    return used
 
 
 def figure_aucell_zscore_violins(
