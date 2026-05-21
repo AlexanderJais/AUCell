@@ -22,7 +22,6 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 from matplotlib import cm
 import seaborn as sns
-from adjustText import adjust_text
 from typing import Optional, List, Dict, Iterable
 
 logger = logging.getLogger(__name__)
@@ -110,6 +109,7 @@ def _add_umap_axis_arrows(
     origin: tuple = (0.02, 0.02),
     linewidth: float = 0.5,
     fontsize: float = 4.5,
+    mutation_scale: Optional[float] = None,
 ) -> None:
     """Draw two small axis arrows in the bottom-left corner of a UMAP panel.
 
@@ -128,6 +128,8 @@ def _add_umap_axis_arrows(
         color="black",
         shrinkA=0, shrinkB=0,
     )
+    if mutation_scale is not None:
+        arrow_style["mutation_scale"] = mutation_scale
     ax.annotate(
         "", xy=(x0 + length, y0), xytext=(x0, y0),
         xycoords="axes fraction", textcoords="axes fraction",
@@ -424,6 +426,7 @@ def figure_bactrap_volcano(
                 )
 
     if len(texts) > 0:
+        from adjustText import adjust_text
         adjust_text(
             texts, ax=ax,
             arrowprops=dict(arrowstyle="-", color="gray", lw=0.3),
@@ -595,6 +598,106 @@ def figure_celltype_umap(
     logger.info("figure_celltype_umap: %d highlighted clusters",
                 len(top_labels))
 
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Figure 2: gene expression across a region (e.g. Pnoc in the preoptic area)
+# ---------------------------------------------------------------------------
+
+def figure_gene_poa_umap(
+    umap_coords: np.ndarray,
+    cell_labels: np.ndarray,
+    region_mask: np.ndarray,
+    gene_expr: np.ndarray,
+    expressing_mask: np.ndarray,
+    highlight_clusters: List[str],
+    gene_name: str = "Pnoc",
+    region_label: str = "preoptic",
+    double_column: bool = True,
+) -> plt.Figure:
+    """Two-panel UMAP of a gene's expression within a region, on the full atlas.
+
+    Both panels draw every atlas cell as a light-grey backdrop (fig_1a's
+    "Other" layer) for topology context. On top of that:
+
+    * **Left** — the *region* cells of each cluster in *highlight_clusters*
+      (typically the top-N clusters by mean expression within the region) are
+      drawn in colour, so you can see which clusters carry the signal.
+    * **Right** — the *expressing* region cells are coloured by *gene_expr*
+      (magma); non-expressing region cells stay in the grey backdrop so the
+      panel shows where the gene actually is rather than a field of zeros.
+
+    All inputs are arrays over the **full atlas** (same length / order):
+        region_mask     bool — cells inside the region (e.g. preoptic).
+        gene_expr       float — per-cell normalised expression (log-norm).
+        expressing_mask bool — cells with raw count > threshold (usually > 0).
+
+    This is the shared renderer used by both the standalone Figure 2 script
+    and the Streamlit app, so they produce identical panels.
+    """
+    setup_nature_style()
+    region_mask = np.asarray(region_mask, dtype=bool)
+    expressing_mask = np.asarray(expressing_mask, dtype=bool)
+    gene_expr = np.asarray(gene_expr, dtype=float)
+
+    width = get_figure_width(double_column)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(width, width * 0.5),
+                                   gridspec_kw={"wspace": 0.6})
+    other = "#d9d9d9"
+
+    unique = set(np.unique(cell_labels).tolist())
+    highlight = [c for c in highlight_clusters if c in unique]
+
+    # --- left: full-atlas grey, region cells of top clusters coloured ---
+    ax1.scatter(umap_coords[:, 0], umap_coords[:, 1], c=other, s=1.5,
+                alpha=0.4, edgecolors="none", rasterized=True)
+    palette = get_qualitative_palette(max(len(highlight), 1))
+    color_map = {cl: palette[i % len(palette)] for i, cl in enumerate(highlight)}
+    for cl in highlight:
+        m = region_mask & (cell_labels == cl)
+        if not m.any():
+            continue
+        ax1.scatter(umap_coords[m, 0], umap_coords[m, 1], c=[color_map[cl]],
+                    s=5.0, alpha=0.95, edgecolors="none", rasterized=True)
+    ax1.set_title(f"Top {gene_name} clusters ({region_label})")
+    ax1.set_xticks([]); ax1.set_yticks([])
+    for s in ax1.spines.values():
+        s.set_visible(False)
+    _add_umap_axis_arrows(ax1, mutation_scale=5)
+    handles = [
+        plt.Line2D([0], [0], marker="o", color="w",
+                   markerfacecolor=color_map[cl], markersize=3.5, label=cl)
+        for cl in highlight
+    ]
+    handles.append(plt.Line2D([0], [0], marker="o", color="w",
+                              markerfacecolor=other, markersize=3.5, label="Other"))
+    ax1.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.02),
+               fontsize=4.5, frameon=False, ncol=2, handletextpad=0.2,
+               columnspacing=0.5, labelspacing=0.3)
+
+    # --- right: full-atlas grey, expressing region cells coloured by expr ---
+    ax2.scatter(umap_coords[:, 0], umap_coords[:, 1], c=other, s=1.5,
+                alpha=0.4, edgecolors="none", rasterized=True)
+    expressing = region_mask & expressing_mask
+    ex_e = gene_expr[expressing]
+    vmax = (float(np.nanpercentile(ex_e, 98)) if ex_e.size else 1.0) or 1.0
+    o = np.argsort(ex_e)  # draw brightest last
+    sc_h = ax2.scatter(umap_coords[expressing][o, 0], umap_coords[expressing][o, 1],
+                       c=ex_e[o], cmap="magma", s=4.0, alpha=0.9,
+                       edgecolors="none", rasterized=True, vmin=0.0, vmax=vmax)
+    ax2.set_title(f"{gene_name} expression ({region_label})")
+    ax2.set_xticks([]); ax2.set_yticks([])
+    for s in ax2.spines.values():
+        s.set_visible(False)
+    _add_umap_axis_arrows(ax2, mutation_scale=5)
+    cbar = fig.colorbar(sc_h, ax=ax2, shrink=0.7, aspect=20, pad=0.02)
+    cbar.set_label(f"{gene_name} (log-norm)", fontsize=6)
+    cbar.ax.tick_params(labelsize=5)
+
+    logger.info("figure_gene_poa_umap: gene=%s region=%s, %d region cells, "
+                "%d highlighted clusters", gene_name, region_label,
+                int(region_mask.sum()), len(highlight))
     return fig
 
 

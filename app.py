@@ -513,12 +513,18 @@ from analysis import (
     validate_aucell_input,
     compute_cluster_enrichment_stats,
 )
+from figure2_inputs import (
+    resolve_gene_index,
+    gene_poa_inputs,
+    region_cell_mask,
+)
 from figures import (
     setup_nature_style,
     figure_bactrap_volcano,
     figure_umap_enrichment,
     figure_aucell_umap,
     figure_celltype_umap,
+    figure_gene_poa_umap,
     figure_aucell_cluster_barplot,
     figure_aucell_violins,
     figure_aucell_zscore_violins,
@@ -1769,6 +1775,90 @@ if run_button or st.session_state.analysis_done:
                 help="Top-15 rows are the highlighted clusters in this panel.",
             )
         plt.close(fig_1a_ct)
+
+        # Figure 2: Pnoc expression across the preoptic area
+        # Always computed on the FULL atlas (independent of the sidebar region
+        # restriction) so the grey backdrop shows whole-atlas topology like
+        # fig_1a. Uses the shared figure2_inputs + figures.figure_gene_poa_umap
+        # code path, so this panel is identical to the standalone
+        # figure2_pnoc_poa.py output.
+        FIG2_GENE = "Pnoc"
+        FIG2_KEYWORDS = ("preoptic",)
+        FIG2_REGION_LABEL = "preoptic"
+        FIG2_MIN_CELLS = 20
+        st.subheader(f"Figure 2: {FIG2_GENE} expression across the preoptic area")
+        _fig2_top_n = st.number_input(
+            "Clusters to highlight (top N by mean expression in region)",
+            min_value=1, max_value=20, value=6, step=1, key="fig2_top_n",
+        )
+        _fig2_hit = resolve_gene_index(adata, FIG2_GENE)
+        if _fig2_hit is None:
+            st.warning(
+                f"`{FIG2_GENE}` not found in the atlas — Figure 2 skipped."
+            )
+        else:
+            _fig2_idx, _fig2_disp, _fig2_use_raw = _fig2_hit
+            _fig2_umap_key = "X_umap" if "X_umap" in adata.obsm else "X_UMAP"
+            _fig2_umap = adata.obsm[_fig2_umap_key]
+            _fig2_labels = adata.obs[annotation_col].astype(str).values
+            _fig2_region = region_cell_mask(adata, keywords=FIG2_KEYWORDS)
+            _fig2_expr, _fig2_expressing, _fig2_ranking, _fig2_highlight = (
+                gene_poa_inputs(
+                    adata, _fig2_idx, _fig2_use_raw, _fig2_region, _fig2_labels,
+                    min_cells=FIG2_MIN_CELLS, top_n=int(_fig2_top_n),
+                )
+            )
+            st.markdown(
+                f"**Figure 2.** Full-atlas UMAP (same layout as 1a). "
+                f"**Left:** the {int(_fig2_top_n)} preoptic clusters with the "
+                f"highest mean *{FIG2_GENE}* expression (CP10k log1p, "
+                f"≥ {FIG2_MIN_CELLS} cells) drawn in colour over a light-grey "
+                f"backdrop of all atlas cells. **Right:** *{FIG2_GENE}* "
+                f"expression of the preoptic cells (non-expressing cells join "
+                f"the grey backdrop). Preoptic = `Region_summarized` containing "
+                f"'{FIG2_KEYWORDS[0]}' "
+                f"(n = {int(_fig2_region.sum()):,} cells)."
+            )
+            fig_2 = figure_gene_poa_umap(
+                umap_coords=_fig2_umap,
+                cell_labels=_fig2_labels,
+                region_mask=_fig2_region,
+                gene_expr=_fig2_expr,
+                expressing_mask=_fig2_expressing,
+                highlight_clusters=_fig2_highlight,
+                gene_name=FIG2_GENE,
+                region_label=FIG2_REGION_LABEL,
+            )
+            st.pyplot(fig_2)
+            _cache_fig("fig_2_pnoc_poa", fig_2)
+            st.session_state.table_bytes["fig_2_pnoc_poa_clusters"] = (
+                _fig2_ranking.to_csv().encode()
+            )
+
+            _f2_pdf, _f2_svg, _f2_csv = st.columns(3)
+            with _f2_pdf:
+                st.download_button(
+                    "Download PDF",
+                    st.session_state.fig_bytes["fig_2_pnoc_poa"]["pdf"],
+                    "fig2_pnoc_poa.pdf", "application/pdf",
+                    key="dl_fig_2_pdf",
+                )
+            with _f2_svg:
+                st.download_button(
+                    "Download SVG",
+                    st.session_state.fig_bytes["fig_2_pnoc_poa"]["svg"],
+                    "fig2_pnoc_poa.svg", "image/svg+xml",
+                    key="dl_fig_2_svg",
+                )
+            with _f2_csv:
+                st.download_button(
+                    "Download CSV (per-cluster ranking)",
+                    st.session_state.table_bytes["fig_2_pnoc_poa_clusters"],
+                    "fig2_pnoc_poa_clusters.csv", "text/csv",
+                    key="dl_fig_2_csv",
+                    help=f"Preoptic clusters ranked by mean {FIG2_GENE}.",
+                )
+            plt.close(fig_2)
 
         st.markdown("---")
         st.caption(
