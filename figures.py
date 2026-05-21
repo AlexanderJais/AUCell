@@ -797,7 +797,7 @@ def figure_pnoc_overview(
     double_column: bool = True,
     point_size: float = 0.3,
     fig2_subsample_idx: Optional[np.ndarray] = None,
-    pnoc_violin_top_n: int = 10,
+    gene_panel_top_n: int = 10,
     violin_top_n: int = 15,
     violin_min_cluster_cells: int = 20,
     violin_allowed_clusters: Optional[Iterable[str]] = None,
@@ -805,7 +805,7 @@ def figure_pnoc_overview(
     """Five-panel composite, all panels equal-sized:
 
         row 1: gene clusters UMAP        | gene expression UMAP (+ colorbar)
-        row 2: gene expression violins   | cell-type UMAP (top AUCell clusters)
+        row 2: gene expression dot plot  | cell-type UMAP (top AUCell clusters)
         row 3: AUCell-score violins      | (empty)
 
         top-left   Figure 2 left  — top `gene_name` clusters in the region
@@ -837,12 +837,13 @@ def figure_pnoc_overview(
     full_labels = np.asarray(fig2_labels)
     full_region = np.asarray(fig2_region_mask, dtype=bool)
     full_expr = np.asarray(fig2_gene_expr, dtype=float)
+    full_expressing = np.asarray(fig2_expressing_mask, dtype=bool)
 
     umap = fig2_umap
     labels = full_labels
     region = full_region
     expr = full_expr
-    expressing = np.asarray(fig2_expressing_mask, dtype=bool)
+    expressing = full_expressing
     if fig2_subsample_idx is not None:
         umap = umap[fig2_subsample_idx]
         labels = labels[fig2_subsample_idx]
@@ -860,7 +861,7 @@ def figure_pnoc_overview(
     ax_f2c = fig.add_subplot(gs[0, 0])      # row1 L: gene clusters UMAP
     ax_f2e = fig.add_subplot(gs[0, 2])      # row1 R: gene expression UMAP
     cax = fig.add_subplot(gs[0, 3])         # colorbar
-    ax_gvio = fig.add_subplot(gs[1, 0])     # row2 L: gene expression violins
+    ax_gvio = fig.add_subplot(gs[1, 0])     # row2 L: gene expression dot plot
     ax_ct = fig.add_subplot(gs[1, 2])       # row2 R: cell-type (AUCell) UMAP
     ax_avio = fig.add_subplot(gs[2, 0])     # row3 L: AUCell violins
 
@@ -882,11 +883,11 @@ def figure_pnoc_overview(
         legend_loc="right",
     )
 
-    # --- row 2 left: gene-expression violins (top-N Pnoc clusters) ---
-    gene_violin_clusters = f2_high[:pnoc_violin_top_n]
-    _draw_gene_cluster_violins(
-        ax_gvio, full_expr, full_labels, full_region, gene_violin_clusters,
-        shared_cmap, xlabel=f"{gene_name} (log-norm)",
+    # --- row 2 left: gene-expression dot plot (top-N Pnoc clusters) ---
+    gene_panel_clusters = f2_high[:gene_panel_top_n]
+    _draw_gene_cluster_dotplot(
+        ax_gvio, full_expr, full_expressing, full_labels, full_region,
+        gene_panel_clusters, gene_name,
     )
 
     # --- row 2 right: cell-type UMAP, top AUCell clusters coloured ---
@@ -1102,42 +1103,65 @@ def _draw_aucell_violins(ax, aucell_scores, cell_labels, top_n=15,
     return top_clusters
 
 
-def _draw_gene_cluster_violins(ax, values, cell_labels, region_mask, clusters,
-                               color_map, xlabel):
-    """Horizontal violins of a continuous per-cell value (e.g. log-norm gene
-    expression) for the given *clusters*, using only *region_mask* cells, drawn
-    onto *ax* and coloured by *color_map* (the shared composite palette). Plain
-    violins — no individual points/replicates. Clusters are kept in the order
-    supplied (so the highest-expressing cluster sits at the top)."""
+def _draw_gene_cluster_dotplot(ax, expr, expressing, cell_labels, region_mask,
+                               clusters, gene_name, cmap="magma",
+                               size_scale=320.0, size_floor=10.0):
+    """Single-gene dot plot for the given *clusters* (region cells only), drawn
+    onto *ax*: one row per cluster, dot SIZE = fraction of cells expressing the
+    gene (raw count > 0), dot COLOUR = mean log-norm expression among the
+    expressing cells. The standard sparse-gene summary — robust to the
+    zero-inflation that makes violins of a sparse gene uninformative.
+
+    Adds its own colorbar (mean expression) and a size legend (% expressing)
+    just to the right of the panel. Clusters keep the order supplied (highest
+    first at the top)."""
     region_mask = np.asarray(region_mask, dtype=bool)
     cell_labels = np.asarray(cell_labels)
-    values = np.asarray(values, dtype=float)
+    expr = np.asarray(expr, dtype=float)
+    expressing = np.asarray(expressing, dtype=bool)
 
-    data, used = [], []
+    fracs, means, used = [], [], []
     for cl in clusters:
         m = region_mask & (cell_labels == cl)
-        if int(m.sum()) < 2:
+        n = int(m.sum())
+        if n < 1:
             continue
-        data.append(values[m])
+        e = m & expressing
+        ne = int(e.sum())
+        fracs.append(ne / n)
+        means.append(float(expr[e].mean()) if ne > 0 else 0.0)
         used.append(cl)
-    if not data:
+    if not used:
         ax.text(0.5, 0.5, "No data available", ha="center", va="center",
                 transform=ax.transAxes)
-        return used
+        return None
 
-    parts = ax.violinplot(data, positions=range(len(used)), vert=False,
-                          showmeans=False, showmedians=False, showextrema=False)
-    for i, body in enumerate(parts["bodies"]):
-        body.set_facecolor(color_map.get(used[i], "#888888"))
-        body.set_alpha(0.8)
-        body.set_edgecolor("grey")
-        body.set_linewidth(0.5)
-    ax.set_yticks(range(len(used)))
+    y = list(range(len(used)))
+    sizes = [f * size_scale + size_floor for f in fracs]
+    vmax = max(means) or 1.0
+    sc = ax.scatter([0] * len(used), y, s=sizes, c=means, cmap=cmap,
+                    vmin=0.0, vmax=vmax, edgecolors="grey", linewidths=0.3)
+    ax.set_yticks(y)
     ax.set_yticklabels(used, fontsize=6)
-    ax.set_xlabel(xlabel)
-    ax.tick_params(axis="x", labelsize=6)
-    ax.invert_yaxis()  # highest-expressing cluster at the top
-    return used
+    ax.set_xticks([0])
+    ax.set_xticklabels([gene_name], fontsize=6)
+    ax.set_xlim(-1, 1)
+    ax.invert_yaxis()
+    for side in ("top", "right", "bottom"):
+        ax.spines[side].set_visible(False)
+
+    cbar_ax = ax.inset_axes([1.06, 0.0, 0.05, 1.0])
+    cbar = ax.figure.colorbar(sc, cax=cbar_ax)
+    cbar.set_label(f"mean {gene_name}\n(log-norm, expr.)", fontsize=5)
+    cbar.ax.tick_params(labelsize=5)
+
+    for f in (0.05, 0.15, 0.25):
+        ax.scatter([], [], s=f * size_scale + size_floor, c="lightgrey",
+                   edgecolors="grey", linewidths=0.3, label=f"{int(f * 100)}%")
+    ax.legend(loc="center left", bbox_to_anchor=(1.35, 0.5), fontsize=5,
+              frameon=False, title=f"% {gene_name}+", title_fontsize=5,
+              labelspacing=0.9, handletextpad=0.4, borderaxespad=0)
+    return sc
 
 
 def figure_aucell_zscore_violins(
