@@ -519,6 +519,81 @@ def figure_aucell_umap(
 # Main Figure: Cell-type annotation UMAP (top-N highlighted)
 # ---------------------------------------------------------------------------
 
+# Shared UMAP scatter constants so every UMAP panel (fig_1a, Figure 2, ...)
+# renders with identical dot sizes and colours. Changing these changes all
+# UMAP panels at once — that is the point.
+UMAP_OTHER_COLOR = "#d9d9d9"
+UMAP_HIGHLIGHT_SCALE = 2.5  # highlighted/coloured dots are this * point_size
+
+
+def _style_umap_ax(ax) -> None:
+    """Strip ticks and spines — the bare UMAP panel look used everywhere."""
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+
+def _draw_cluster_scatter(
+    ax, umap_coords, cell_labels, highlight, color_map, point_size,
+    other_color=UMAP_OTHER_COLOR, select_mask=None,
+) -> None:
+    """Grey 'Other' backdrop + coloured highlight clusters.
+
+    This is the single scatter primitive behind every cluster-coloured UMAP
+    (fig_1a and Figure 2's left panel), so they look identical. *select_mask*,
+    when given, restricts which cells are eligible to be coloured (Figure 2
+    colours only the region cells of each cluster); everything else is grey.
+    """
+    top_set = set(highlight)
+    colored = np.isin(cell_labels, list(top_set))
+    if select_mask is not None:
+        colored = colored & np.asarray(select_mask, dtype=bool)
+    is_other = ~colored
+    ax.scatter(
+        umap_coords[is_other, 0], umap_coords[is_other, 1],
+        c=other_color, s=point_size, alpha=0.4,
+        edgecolors="none", rasterized=True,
+    )
+    for cl in highlight:
+        mask = cell_labels == cl
+        if select_mask is not None:
+            mask = mask & np.asarray(select_mask, dtype=bool)
+        if not mask.any():
+            continue
+        ax.scatter(
+            umap_coords[mask, 0], umap_coords[mask, 1],
+            c=[color_map[cl]], s=point_size * UMAP_HIGHLIGHT_SCALE, alpha=0.95,
+            edgecolors="none", rasterized=True,
+        )
+    _style_umap_ax(ax)
+
+
+def _draw_expression_scatter(
+    ax, umap_coords, values, select_mask, point_size,
+    cmap="magma", other_color=UMAP_OTHER_COLOR,
+):
+    """Grey backdrop of all cells + selected cells coloured by a continuous
+    value, using the same dot sizes as `_draw_cluster_scatter` so expression
+    and cluster panels match. Returns the mappable for a colorbar."""
+    ax.scatter(
+        umap_coords[:, 0], umap_coords[:, 1],
+        c=other_color, s=point_size, alpha=0.4,
+        edgecolors="none", rasterized=True,
+    )
+    sel = np.asarray(select_mask, dtype=bool)
+    vals = np.asarray(values, dtype=float)[sel]
+    vmax = (float(np.nanpercentile(vals, 98)) if vals.size else 1.0) or 1.0
+    order = np.argsort(vals)  # brightest drawn last
+    sc = ax.scatter(
+        umap_coords[sel][order, 0], umap_coords[sel][order, 1],
+        c=vals[order], cmap=cmap, s=point_size * UMAP_HIGHLIGHT_SCALE,
+        alpha=0.95, edgecolors="none", rasterized=True, vmin=0.0, vmax=vmax,
+    )
+    _style_umap_ax(ax)
+    return sc
+
+
 def figure_celltype_umap(
     umap_coords: np.ndarray,
     cell_labels: np.ndarray,
@@ -533,8 +608,7 @@ def figure_celltype_umap(
     The clusters in *highlight_clusters* (in the supplied order — typically
     top-N by AUCell mean) are drawn in colour on top of a grey "Other" layer,
     so small but highly enriched populations remain visible. Axis labels and
-    title are omitted; a legend sits to the right of the panel and the two
-    bottom-left arrows mark UMAP1 / UMAP2.
+    title are omitted; a legend sits to the right of the panel.
     """
     setup_nature_style()
     width = get_figure_width(double_column)
@@ -553,32 +627,12 @@ def figure_celltype_umap(
 
     unique = set(np.unique(cell_labels).tolist())
     top_labels = [c for c in highlight_clusters if c in unique]
-    top_set = set(top_labels)
 
     palette = get_qualitative_palette(max(len(top_labels), 1))
     color_map = {cl: palette[i % len(palette)] for i, cl in enumerate(top_labels)}
-    other_color = "#d9d9d9"
 
-    is_other = np.array([lbl not in top_set for lbl in cell_labels])
-    ax.scatter(
-        umap_coords[is_other, 0], umap_coords[is_other, 1],
-        c=other_color, s=point_size, alpha=0.4,
-        edgecolors="none", rasterized=True,
-    )
-    for cl in top_labels:
-        mask = cell_labels == cl
-        if not mask.any():
-            continue
-        ax.scatter(
-            umap_coords[mask, 0], umap_coords[mask, 1],
-            c=[color_map[cl]], s=point_size * 2.5, alpha=0.95,
-            edgecolors="none", rasterized=True,
-        )
-
-    ax.set_xticks([])
-    ax.set_yticks([])
-    for spine in ax.spines.values():
-        spine.set_visible(False)
+    _draw_cluster_scatter(ax, umap_coords, cell_labels, top_labels,
+                          color_map, point_size)
 
     handles = [
         plt.Line2D([0], [0], marker="o", color="w",
@@ -587,7 +641,7 @@ def figure_celltype_umap(
     ]
     handles.append(
         plt.Line2D([0], [0], marker="o", color="w",
-                   markerfacecolor=other_color, markersize=3.5, label="Other")
+                   markerfacecolor=UMAP_OTHER_COLOR, markersize=3.5, label="Other")
     )
     ax.legend(
         handles=handles, loc="center left", bbox_to_anchor=(1.02, 0.5),
@@ -614,83 +668,75 @@ def figure_gene_poa_umap(
     highlight_clusters: List[str],
     gene_name: str = "Pnoc",
     region_label: str = "preoptic",
-    double_column: bool = True,
+    double_column: bool = False,
+    point_size: float = 0.3,
+    subsample_idx: Optional[np.ndarray] = None,
 ) -> plt.Figure:
     """Two-panel UMAP of a gene's expression within a region, on the full atlas.
 
-    Both panels draw every atlas cell as a light-grey backdrop (fig_1a's
-    "Other" layer) for topology context. On top of that:
+    Renders with the **exact same scatter primitives, dot sizes, colours and
+    per-panel geometry as `figure_celltype_umap` (fig_1a)** — each panel uses
+    the shared `_draw_cluster_scatter` / `_draw_expression_scatter` helpers at
+    `point_size` (backdrop) and `point_size * UMAP_HIGHLIGHT_SCALE` (coloured),
+    so the two figures match in appearance.
 
     * **Left** — the *region* cells of each cluster in *highlight_clusters*
-      (typically the top-N clusters by mean expression within the region) are
-      drawn in colour, so you can see which clusters carry the signal.
+      are coloured over a grey "Other" backdrop of all atlas cells.
     * **Right** — the *expressing* region cells are coloured by *gene_expr*
-      (magma); non-expressing region cells stay in the grey backdrop so the
-      panel shows where the gene actually is rather than a field of zeros.
+      (magma) over the same grey backdrop; non-expressing cells stay grey.
 
-    All inputs are arrays over the **full atlas** (same length / order):
-        region_mask     bool — cells inside the region (e.g. preoptic).
-        gene_expr       float — per-cell normalised expression (log-norm).
-        expressing_mask bool — cells with raw count > threshold (usually > 0).
+    All array inputs are over the **full atlas** (same length / order). Pass
+    *subsample_idx* (as fig_1a does) to thin the backdrop to the same density.
 
-    This is the shared renderer used by both the standalone Figure 2 script
-    and the Streamlit app, so they produce identical panels.
+    Shared by the standalone Figure 2 script and the Streamlit app.
     """
     setup_nature_style()
     region_mask = np.asarray(region_mask, dtype=bool)
     expressing_mask = np.asarray(expressing_mask, dtype=bool)
     gene_expr = np.asarray(gene_expr, dtype=float)
+    cell_labels = np.asarray(cell_labels)
 
-    width = get_figure_width(double_column)
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(width, width * 0.5),
-                                   gridspec_kw={"wspace": 0.6})
-    other = "#d9d9d9"
+    if subsample_idx is not None:
+        umap_coords = umap_coords[subsample_idx]
+        cell_labels = cell_labels[subsample_idx]
+        region_mask = region_mask[subsample_idx]
+        expressing_mask = expressing_mask[subsample_idx]
+        gene_expr = gene_expr[subsample_idx]
+
+    # Per-panel geometry equals a fig_1a panel, so the UMAP spans the same
+    # number of inches and the (absolute-sized) dots look identical.
+    panel_w = get_figure_width(double_column)
+    fig, (ax1, ax2) = plt.subplots(
+        1, 2, figsize=(2 * panel_w + 0.9, panel_w * 0.9),
+        gridspec_kw={"wspace": 0.35},
+    )
 
     unique = set(np.unique(cell_labels).tolist())
     highlight = [c for c in highlight_clusters if c in unique]
-
-    # --- left: full-atlas grey, region cells of top clusters coloured ---
-    ax1.scatter(umap_coords[:, 0], umap_coords[:, 1], c=other, s=1.5,
-                alpha=0.4, edgecolors="none", rasterized=True)
     palette = get_qualitative_palette(max(len(highlight), 1))
     color_map = {cl: palette[i % len(palette)] for i, cl in enumerate(highlight)}
-    for cl in highlight:
-        m = region_mask & (cell_labels == cl)
-        if not m.any():
-            continue
-        ax1.scatter(umap_coords[m, 0], umap_coords[m, 1], c=[color_map[cl]],
-                    s=5.0, alpha=0.95, edgecolors="none", rasterized=True)
+
+    # --- left: cluster identity (region cells of top clusters) ---
+    _draw_cluster_scatter(ax1, umap_coords, cell_labels, highlight, color_map,
+                          point_size, select_mask=region_mask)
     ax1.set_title(f"Top {gene_name} clusters ({region_label})")
-    ax1.set_xticks([]); ax1.set_yticks([])
-    for s in ax1.spines.values():
-        s.set_visible(False)
-    _add_umap_axis_arrows(ax1, mutation_scale=5)
     handles = [
         plt.Line2D([0], [0], marker="o", color="w",
                    markerfacecolor=color_map[cl], markersize=3.5, label=cl)
         for cl in highlight
     ]
     handles.append(plt.Line2D([0], [0], marker="o", color="w",
-                              markerfacecolor=other, markersize=3.5, label="Other"))
+                              markerfacecolor=UMAP_OTHER_COLOR, markersize=3.5,
+                              label="Other"))
     ax1.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.02),
-               fontsize=4.5, frameon=False, ncol=2, handletextpad=0.2,
-               columnspacing=0.5, labelspacing=0.3)
+               fontsize=5, frameon=False, ncol=2, handletextpad=0.3,
+               columnspacing=0.5, labelspacing=0.35)
 
-    # --- right: full-atlas grey, expressing region cells coloured by expr ---
-    ax2.scatter(umap_coords[:, 0], umap_coords[:, 1], c=other, s=1.5,
-                alpha=0.4, edgecolors="none", rasterized=True)
-    expressing = region_mask & expressing_mask
-    ex_e = gene_expr[expressing]
-    vmax = (float(np.nanpercentile(ex_e, 98)) if ex_e.size else 1.0) or 1.0
-    o = np.argsort(ex_e)  # draw brightest last
-    sc_h = ax2.scatter(umap_coords[expressing][o, 0], umap_coords[expressing][o, 1],
-                       c=ex_e[o], cmap="magma", s=4.0, alpha=0.9,
-                       edgecolors="none", rasterized=True, vmin=0.0, vmax=vmax)
+    # --- right: gene expression of expressing region cells ---
+    sc_h = _draw_expression_scatter(
+        ax2, umap_coords, gene_expr, region_mask & expressing_mask, point_size,
+    )
     ax2.set_title(f"{gene_name} expression ({region_label})")
-    ax2.set_xticks([]); ax2.set_yticks([])
-    for s in ax2.spines.values():
-        s.set_visible(False)
-    _add_umap_axis_arrows(ax2, mutation_scale=5)
     cbar = fig.colorbar(sc_h, ax=ax2, shrink=0.7, aspect=20, pad=0.02)
     cbar.set_label(f"{gene_name} (log-norm)", fontsize=6)
     cbar.ax.tick_params(labelsize=5)

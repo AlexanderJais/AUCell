@@ -35,6 +35,7 @@ POA_KEYWORDS = ("preoptic",)
 REGION_LABEL = "preoptic"
 MIN_CELLS = 20
 DEFAULT_TOP_N = 6
+SUBSAMPLE = 50000  # backdrop density; matches the app's umap_subsample default
 
 
 def main(h5ad_path, out_dir=".", top_n=DEFAULT_TOP_N):
@@ -62,10 +63,16 @@ def main(h5ad_path, out_dir=".", top_n=DEFAULT_TOP_N):
     ranking.to_csv(out_dir / "fig2_pnoc_poa_clusters.csv")
     print(f"Highlighting top {top_n} clusters:\n", ranking.head(top_n).round(3))
 
+    subsample = None
+    if adata.n_obs > SUBSAMPLE:
+        subsample = np.sort(np.random.default_rng(42).choice(
+            adata.n_obs, size=SUBSAMPLE, replace=False))
+
     fig = figure_gene_poa_umap(
         umap_coords=umap, cell_labels=labels, region_mask=region_mask,
         gene_expr=expr, expressing_mask=expressing,
         highlight_clusters=highlight, gene_name=GENE, region_label=REGION_LABEL,
+        subsample_idx=subsample,
     )
     for ext in ("pdf", "svg", "png"):
         path = out_dir / f"fig2_pnoc_poa.{ext}"

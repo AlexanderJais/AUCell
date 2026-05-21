@@ -1808,6 +1808,13 @@ if run_button or st.session_state.analysis_done:
                     min_cells=FIG2_MIN_CELLS, top_n=int(_fig2_top_n),
                 )
             )
+            # Subsample the backdrop to the same density as fig_1a (same
+            # umap_subsample count and seed=42), so the two figures match.
+            _fig2_sub = None
+            if adata.n_obs > umap_subsample:
+                _fig2_rng = np.random.default_rng(42)
+                _fig2_sub = np.sort(_fig2_rng.choice(
+                    adata.n_obs, size=umap_subsample, replace=False))
             st.markdown(
                 f"**Figure 2.** Full-atlas UMAP (same layout as 1a). "
                 f"**Left:** the {int(_fig2_top_n)} preoptic clusters with the "
@@ -1828,6 +1835,8 @@ if run_button or st.session_state.analysis_done:
                 highlight_clusters=_fig2_highlight,
                 gene_name=FIG2_GENE,
                 region_label=FIG2_REGION_LABEL,
+                double_column=double_column,
+                subsample_idx=_fig2_sub,
             )
             st.pyplot(fig_2)
             _cache_fig("fig_2_pnoc_poa", fig_2)
