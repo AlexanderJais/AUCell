@@ -146,6 +146,52 @@ def main(path):
         print("Top clusters within POA:")
         print(labels[poa].value_counts().head(20))
 
+    # ===================================================================
+    # THE ACTUAL QUESTION: which clusters express Pnoc in the MPA?
+    # ===================================================================
+    if hit is not None and ann and region_col in adata.obs.columns:
+        where, gidx, disp, src = hit
+        print(f"\n=== Pnoc per-cluster expression (gene '{disp}' from {where}, "
+              f"col '{src}') ===")
+
+        # Pull the single Pnoc column as a dense 1-D vector. Use raw counts
+        # if that's where the gene was found.
+        src_adata = adata.raw if where == "raw" and adata.raw is not None else adata
+        col = src_adata[:, gidx].X
+        col = np.asarray(col.todense()).ravel() if hasattr(col, "todense") else np.asarray(col).ravel()
+
+        # CP10k + log1p normalisation per cell so means are comparable across
+        # cells of different depth (matches the app's compute_cluster_mean).
+        depth = np.asarray(adata.obs["nCount_RNA"], dtype=float)
+        depth[depth == 0] = 1.0
+        norm = np.log1p(col / depth * 1e4)
+
+        # Restrict to the Medial preoptic area specifically.
+        for region_name in ("Medial preoptic area", "preoptic"):
+            if region_name == "preoptic":
+                sel = regions.str.contains("preoptic", case=False, na=False).values
+                tag = "all preoptic (MPA+LPA+periventricular)"
+            else:
+                sel = (regions == region_name).values
+                tag = region_name
+            n_sel = int(sel.sum())
+            if n_sel == 0:
+                continue
+            df = pd.DataFrame({
+                "cluster": labels.values[sel],
+                "norm": norm[sel],
+                "expr": (col[sel] > 0).astype(float),
+            })
+            g = df.groupby("cluster").agg(
+                n_cells=("norm", "size"),
+                mean_lognorm=("norm", "mean"),
+                frac_expressing=("expr", "mean"),
+            )
+            g = g[g["n_cells"] >= 10].sort_values("mean_lognorm", ascending=False)
+            print(f"\n--- {tag} (n={n_sel:,} cells) — clusters by mean Pnoc, "
+                  f">=10 cells ---")
+            print(g.head(25).round(3))
+
     print("\nDone. backed mode used; nothing was modified.")
 
 
