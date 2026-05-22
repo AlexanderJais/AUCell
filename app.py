@@ -520,6 +520,7 @@ from figure2_inputs import (
 )
 from figures import (
     setup_nature_style,
+    get_qualitative_palette,
     figure_bactrap_volcano,
     figure_umap_enrichment,
     figure_aucell_umap,
@@ -1741,6 +1742,49 @@ if run_button or st.session_state.analysis_done:
         _top15_aucell_clusters_ct = (
             _size_filtered_ranked.head(15)["cluster"].astype(str).tolist()
         )
+
+        # Figure-2 constants (also used by the Figure 2 block below).
+        FIG2_GENE = "Pnoc"
+        FIG2_KEYWORDS = ("preoptic",)
+        FIG2_REGION_LABEL = "preoptic"
+        FIG2_MIN_CELLS = 20
+
+        # Precompute Figure 2's highlighted clusters *now* (before fig_1a is
+        # drawn) so both figures can share ONE colour map: any cluster that
+        # appears in both panels gets the same colour. NB this drops no
+        # clusters from either figure — the map just spans the union of both
+        # highlight lists. The Figure 2 block below reuses this precomputation.
+        _fig2_precomp = None
+        _fig2_highlight = []
+        _fig2_hit = resolve_gene_index(adata, FIG2_GENE)
+        if _fig2_hit is not None:
+            _fig2_idx, _fig2_disp, _fig2_use_raw = _fig2_hit
+            _fig2_umap_key = "X_umap" if "X_umap" in adata.obsm else "X_UMAP"
+            _fig2_umap = adata.obsm[_fig2_umap_key]
+            _fig2_labels = adata.obs[annotation_col].astype(str).values
+            _fig2_region = region_cell_mask(adata, keywords=FIG2_KEYWORDS)
+            _fig2_top_n = int(st.session_state.get("fig2_top_n", 20))
+            _fig2_expr, _fig2_expressing, _fig2_ranking, _fig2_highlight = (
+                gene_poa_inputs(
+                    adata, _fig2_idx, _fig2_use_raw, _fig2_region, _fig2_labels,
+                    min_cells=FIG2_MIN_CELLS, top_n=_fig2_top_n,
+                )
+            )
+            _fig2_precomp = True
+
+        # Shared colour map over the UNION of both figures' highlight lists
+        # (fig_1a's AUCell clusters first, then any Pnoc-only clusters), keyed
+        # by cluster name so a shared cluster gets an identical colour in both.
+        _shared_union = list(_top15_aucell_clusters_ct) + [
+            c for c in _fig2_highlight
+            if c not in set(_top15_aucell_clusters_ct)
+        ]
+        _shared_palette = get_qualitative_palette(max(len(_shared_union), 1))
+        _shared_color_map = {
+            cl: _shared_palette[i % len(_shared_palette)]
+            for i, cl in enumerate(_shared_union)
+        }
+
         fig_1a_ct = figure_celltype_umap(
             umap_coords=umap_coords,
             cell_labels=cell_labels,
@@ -1748,6 +1792,7 @@ if run_button or st.session_state.analysis_done:
             double_column=double_column,
             subsample_idx=sub_indices,
             seed=int(empirical_null_seed),
+            color_map=_shared_color_map,
         )
         st.pyplot(fig_1a_ct)
         _cache_fig("fig_1a_celltype_umap", fig_1a_ct)
@@ -1783,35 +1828,22 @@ if run_button or st.session_state.analysis_done:
         # fig_1a. Uses the shared figure2_inputs + figures.figure_gene_poa_umap
         # code path, so this panel is identical to the standalone
         # figure2_pnoc_poa.py output.
-        FIG2_GENE = "Pnoc"
-        FIG2_KEYWORDS = ("preoptic",)
-        FIG2_REGION_LABEL = "preoptic"
-        FIG2_MIN_CELLS = 20
         st.subheader(f"Figure 2: {FIG2_GENE} expression across the preoptic area")
-        _fig2_top_n = st.number_input(
+        # The highlight clusters were precomputed above (before fig_1a) so the
+        # two figures could share one colour map; the widget below drives that
+        # precomputation via `st.session_state["fig2_top_n"]`.
+        st.number_input(
             "Max POA Pnoc-expressing clusters to highlight",
             min_value=1, max_value=25, value=20, step=1, key="fig2_top_n",
             help="All preoptic clusters with detectable Pnoc (Table S1) are "
                  "highlighted, up to this many.",
         )
-        _fig2_hit = resolve_gene_index(adata, FIG2_GENE)
         _fig2_ready = False
-        if _fig2_hit is None:
+        if _fig2_precomp is None:
             st.warning(
                 f"`{FIG2_GENE}` not found in the atlas — Figure 2 skipped."
             )
         else:
-            _fig2_idx, _fig2_disp, _fig2_use_raw = _fig2_hit
-            _fig2_umap_key = "X_umap" if "X_umap" in adata.obsm else "X_UMAP"
-            _fig2_umap = adata.obsm[_fig2_umap_key]
-            _fig2_labels = adata.obs[annotation_col].astype(str).values
-            _fig2_region = region_cell_mask(adata, keywords=FIG2_KEYWORDS)
-            _fig2_expr, _fig2_expressing, _fig2_ranking, _fig2_highlight = (
-                gene_poa_inputs(
-                    adata, _fig2_idx, _fig2_use_raw, _fig2_region, _fig2_labels,
-                    min_cells=FIG2_MIN_CELLS, top_n=int(_fig2_top_n),
-                )
-            )
             # Subsample the backdrop to the same density as fig_1a (same
             # umap_subsample count and seed=42), so the two figures match.
             _fig2_sub = None
@@ -1842,6 +1874,7 @@ if run_button or st.session_state.analysis_done:
                 region_label=FIG2_REGION_LABEL,
                 double_column=double_column,
                 subsample_idx=_fig2_sub,
+                color_map=_shared_color_map,
             )
             st.pyplot(fig_2)
             _cache_fig("fig_2_pnoc_poa", fig_2)
@@ -2032,6 +2065,7 @@ if run_button or st.session_state.analysis_done:
                 violin_top_n=15,
                 violin_min_cluster_cells=min_cells_for_rank,
                 violin_allowed_clusters=_aucell_allowed,
+                color_map=_shared_color_map,
             )
             st.pyplot(fig_overview)
             _cache_fig("fig_pnoc_overview", fig_overview)

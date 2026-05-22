@@ -602,6 +602,7 @@ def figure_celltype_umap(
     point_size: float = 0.3,
     subsample_idx: Optional[np.ndarray] = None,
     seed: int = 0,
+    color_map: Optional[dict] = None,
 ) -> plt.Figure:
     """Publication-ready UMAP coloured by cell-type annotation.
 
@@ -609,6 +610,11 @@ def figure_celltype_umap(
     top-N by AUCell mean) are drawn in colour on top of a grey "Other" layer,
     so small but highly enriched populations remain visible. Axis labels and
     title are omitted; a legend sits to the right of the panel.
+
+    Pass *color_map* (cluster name -> hex) to colour clusters from a caller-
+    supplied palette — used to share colours with other figures so a cluster
+    shown in both gets the same colour. When omitted, a palette is built from
+    the highlighted clusters' order.
     """
     setup_nature_style()
     width = get_figure_width(double_column)
@@ -628,8 +634,10 @@ def figure_celltype_umap(
     unique = set(np.unique(cell_labels).tolist())
     top_labels = [c for c in highlight_clusters if c in unique]
 
-    palette = get_qualitative_palette(max(len(top_labels), 1))
-    color_map = {cl: palette[i % len(palette)] for i, cl in enumerate(top_labels)}
+    if color_map is None:
+        palette = get_qualitative_palette(max(len(top_labels), 1))
+        color_map = {cl: palette[i % len(palette)]
+                     for i, cl in enumerate(top_labels)}
 
     _draw_cluster_scatter(ax, umap_coords, cell_labels, top_labels,
                           color_map, point_size)
@@ -716,6 +724,7 @@ def figure_gene_poa_umap(
     double_column: bool = False,
     point_size: float = 0.3,
     subsample_idx: Optional[np.ndarray] = None,
+    color_map: Optional[dict] = None,
 ) -> plt.Figure:
     """Two-panel UMAP of a gene's expression within a region, on the full atlas.
 
@@ -763,8 +772,10 @@ def figure_gene_poa_umap(
 
     highlight = [c for c in highlight_clusters
                  if c in set(np.unique(cell_labels).tolist())]
-    palette = get_qualitative_palette(max(len(highlight), 1))
-    color_map = {cl: palette[i % len(palette)] for i, cl in enumerate(highlight)}
+    if color_map is None:
+        palette = get_qualitative_palette(max(len(highlight), 1))
+        color_map = {cl: palette[i % len(palette)]
+                     for i, cl in enumerate(highlight)}
 
     _draw_gene_poa_panels(
         ax1, ax2, cax, umap_coords, cell_labels, region_mask, gene_expr,
@@ -801,6 +812,7 @@ def figure_pnoc_overview(
     violin_top_n: int = 15,
     violin_min_cluster_cells: int = 20,
     violin_allowed_clusters: Optional[Iterable[str]] = None,
+    color_map: Optional[dict] = None,
 ) -> plt.Figure:
     """Five-panel composite, all panels equal-sized:
 
@@ -872,9 +884,13 @@ def figure_pnoc_overview(
     # Shared colour map over the UNION of both cluster panels, so a cluster
     # that appears in both the Pnoc panel and the AUCell panel gets the SAME
     # colour. Order: Pnoc clusters first, then any AUCell-only clusters.
-    union = list(f2_high) + [c for c in ct_high if c not in set(f2_high)]
-    palette = get_qualitative_palette(max(len(union), 1))
-    shared_cmap = {cl: palette[i % len(palette)] for i, cl in enumerate(union)}
+    if color_map is not None:
+        shared_cmap = color_map
+    else:
+        union = list(f2_high) + [c for c in ct_high if c not in set(f2_high)]
+        palette = get_qualitative_palette(max(len(union), 1))
+        shared_cmap = {cl: palette[i % len(palette)]
+                       for i, cl in enumerate(union)}
 
     # --- row 1: Figure 2 UMAPs (cluster legend to the RIGHT, into col 1) ---
     _draw_gene_poa_panels(
