@@ -1134,8 +1134,8 @@ def _draw_gene_cluster_dotplot(ax, expr, expressing, cell_labels, region_mask,
     y = list(range(len(used)))
     sizes = [f * size_scale + size_floor for f in fracs]
     colors = [color_map.get(cl, "#888888") for cl in used]
-    ax.scatter([0] * len(used), y, s=sizes, c=colors,
-               edgecolors="grey", linewidths=0.3)
+    sc = ax.scatter([0] * len(used), y, s=sizes, c=colors,
+                    edgecolors="grey", linewidths=0.3)
     ax.set_yticks(y)
     ax.set_yticklabels(used, fontsize=6)
     ax.set_xticks([0])
