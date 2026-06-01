@@ -2033,6 +2033,13 @@ if run_button or st.session_state.analysis_done:
                 "`fig_1c_aucell_violins`. All panels share the same "
                 "rendering and equal dimensions."
             )
+            _overview_font_scale = st.slider(
+                "Composite font size", min_value=1.0, max_value=2.0,
+                value=1.4, step=0.1, key="overview_font_scale",
+                help="Uniformly scales all text (labels, ticks, legends, "
+                     "colorbars) in the composite. 1.0 = the standalone "
+                     "figures' native size.",
+            )
             fig_overview = figure_pnoc_overview(
                 fig2_umap=_fig2_umap,
                 fig2_labels=_fig2_labels,
@@ -2052,6 +2059,7 @@ if run_button or st.session_state.analysis_done:
                 violin_top_n=15,
                 violin_min_cluster_cells=min_cells_for_rank,
                 violin_allowed_clusters=_aucell_allowed,
+                font_scale=_overview_font_scale,
             )
             st.pyplot(fig_overview)
             _cache_fig("fig_pnoc_overview", fig_overview)
