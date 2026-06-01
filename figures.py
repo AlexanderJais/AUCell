@@ -1173,8 +1173,10 @@ def _draw_gene_cluster_dotplot(ax, expressing, gene_names, cell_labels,
 
     *expressing* is a bool array of shape ``(n_cells,)`` (single gene) or
     ``(n_cells, n_genes)``; *gene_names* labels the columns (length must match).
-    Adds a size legend (% expressing) just to the right of the panel. Clusters
-    keep the order supplied (highest first at the top)."""
+    A (cluster, gene) cell with **zero** expressing cells draws **no dot** at
+    all, so unexpressed genes read as blank rather than as a small dot. Adds a
+    size legend (% expressing) just to the right of the panel. Clusters keep the
+    order supplied (highest first at the top)."""
     region_mask = np.asarray(region_mask, dtype=bool)
     cell_labels = np.asarray(cell_labels)
     expressing = np.asarray(expressing, dtype=bool)
@@ -1201,6 +1203,12 @@ def _draw_gene_cluster_dotplot(ax, expressing, gene_names, cell_labels,
     for yi, (cl, fracs) in enumerate(zip(used, frac_rows)):
         col = color_map.get(cl, "#888888")
         for gx in range(n_genes):
+            # No dot where the gene is unexpressed — the additive size floor
+            # (which keeps genuinely low-but-present fractions visible) would
+            # otherwise give a 0%-expressing gene the same small dot as a low
+            # one, hiding the difference.
+            if fracs[gx] <= 0:
+                continue
             xs.append(gx)
             ys.append(yi)
             sizes.append(fracs[gx] * size_scale + size_floor)
