@@ -84,6 +84,35 @@ def setup_nature_style():
     })
 
 
+def _scale_fonts(fig, factor: float) -> None:
+    """Multiply the font size of every text artist in *fig* by *factor*.
+
+    Used by the composite figure, which reuses the standalone figures' shared
+    drawing helpers. Those helpers hard-code small point sizes tuned for a
+    single-column figure; the composite is rendered several times wider, so the
+    text reads small. Scaling after the panels are drawn enlarges every label,
+    tick, legend and colorbar uniformly without touching the shared helpers (so
+    the standalone figures keep their original sizes). ``factor <= 1`` is a
+    no-op so callers can disable it cleanly.
+    """
+    if factor is None or factor <= 1:
+        return
+    texts = list(fig.texts)
+    for ax in fig.axes:
+        texts += [ax.title, ax.xaxis.label, ax.yaxis.label]
+        texts += ax.get_xticklabels() + ax.get_yticklabels()
+        texts += list(ax.texts)
+        leg = ax.get_legend()
+        if leg is not None:
+            texts += list(leg.get_texts())
+            if leg.get_title() is not None:
+                texts.append(leg.get_title())
+    for t in texts:
+        size = t.get_fontsize()
+        if size:
+            t.set_fontsize(size * factor)
+
+
 def get_figure_width(double_column: bool = False) -> float:
     """Return figure width in inches for Nature format."""
     return 7.2 if double_column else 3.5
@@ -803,6 +832,7 @@ def figure_pnoc_overview(
     violin_top_n: int = 15,
     violin_min_cluster_cells: int = 20,
     violin_allowed_clusters: Optional[Iterable[str]] = None,
+    font_scale: float = 1.4,
 ) -> plt.Figure:
     """Five-panel composite, all panels equal-sized:
 
@@ -920,6 +950,10 @@ def figure_pnoc_overview(
     _draw_aucell_violins(ax_avio, aucell_scores, view_labels, top_n=violin_top_n,
                          min_cluster_cells=violin_min_cluster_cells,
                          allowed_clusters=violin_allowed_clusters)
+
+    # Enlarge all text uniformly — the shared helpers' point sizes are tuned
+    # for single-column figures and read small at the composite's width.
+    _scale_fonts(fig, font_scale)
 
     logger.info("figure_pnoc_overview: gene=%s, %d Fig2 clusters, %d AUCell clusters",
                 gene_name, len(f2_high), len(ct_high))

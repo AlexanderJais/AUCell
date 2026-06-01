@@ -1791,7 +1791,7 @@ if run_button or st.session_state.analysis_done:
         # Genes shown as columns in the composite dot plot (Pnoc kept first so
         # the panel leads with the driver gene).
         FIG2_DOTPLOT_GENES = [
-            FIG2_GENE, "Slc17a6", "Adcyap1", "Bdnf", "Sntg2", "Lepr",
+            FIG2_GENE, "Gal", "Bdnf", "Adcyap1", "Slc17a6", "Sntg2", "Lepr",
         ]
         st.subheader(f"Figure 2: {FIG2_GENE} expression across the preoptic area")
         _fig2_top_n = st.number_input(
