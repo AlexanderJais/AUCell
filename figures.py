@@ -716,6 +716,15 @@ def _draw_gene_poa_panels(
                            bbox_to_anchor=(1.02, 0.5), fontsize=6,
                            frameon=False, ncol=1, handletextpad=0.3,
                            labelspacing=0.3, borderaxespad=0)
+    elif legend_loc == "left":
+        # Composite: park the legend off the LEFT edge of the panel (the UMAP
+        # has no y-axis labels there, so the space is free). Keeps the long
+        # cluster names from overflowing the narrow centre gap into the
+        # right-hand panel.
+        ax_clusters.legend(handles=handles, loc="center right",
+                           bbox_to_anchor=(-0.02, 0.5), fontsize=6,
+                           frameon=False, ncol=1, handletextpad=0.3,
+                           labelspacing=0.3, borderaxespad=0)
     else:
         ncol = 2 if len(handles) <= 8 else 3
         ax_clusters.legend(handles=handles, loc="upper center",
@@ -911,11 +920,13 @@ def figure_pnoc_overview(
     palette = get_qualitative_palette(max(len(union), 1))
     shared_cmap = {cl: palette[i % len(palette)] for i, cl in enumerate(union)}
 
-    # --- row 1: Figure 2 UMAPs (cluster legend to the RIGHT, into col 1) ---
+    # --- row 1: Figure 2 UMAPs (cluster legend to the LEFT of the left panel,
+    # so the long cluster names don't overflow the centre gap into the right
+    # panel) ---
     _draw_gene_poa_panels(
         ax_f2c, ax_f2e, cax, umap, labels, region, expr, expressing,
         f2_high, shared_cmap, point_size, gene_name, region_label,
-        legend_loc="right",
+        legend_loc="left",
     )
 
     # --- row 2 left: gene-expression dot plot (top-N Pnoc clusters) ---
