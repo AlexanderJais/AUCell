@@ -74,6 +74,42 @@ def _dense_column(adata, gene_idx: int, use_raw: bool) -> np.ndarray:
     return np.asarray(col, dtype=float).ravel()
 
 
+def gene_expressing_masks(adata, symbols, threshold: float = 0.0):
+    """Resolve a list of gene symbols to per-cell *expressing* masks.
+
+    Used by the multi-gene composite dot plot. For each symbol we resolve its
+    column (main matrix then ``.raw``, like ``resolve_gene_index``) and mark a
+    cell as expressing when its raw count > ``threshold`` — the same definition
+    ``gene_poa_inputs`` uses for the single-gene panels.
+
+    Returns
+    -------
+    names : list[str]
+        The requested symbols that resolved, in input order (used as the dot
+        plot's column labels). Unresolved symbols are dropped.
+    expressing : bool array (n_cells, len(names))
+        Column ``j`` is the expressing mask for ``names[j]``. Shape
+        ``(n_cells, 0)`` if nothing resolved.
+    missing : list[str]
+        Symbols that did not resolve in the atlas.
+    """
+    names, cols, missing = [], [], []
+    for sym in symbols:
+        hit = resolve_gene_index(adata, sym)
+        if hit is None:
+            missing.append(str(sym))
+            continue
+        idx, _disp, use_raw = hit
+        col = _dense_column(adata, idx, use_raw)
+        cols.append(col > threshold)
+        names.append(str(sym))
+    if cols:
+        expressing = np.column_stack(cols)
+    else:
+        expressing = np.zeros((adata.n_obs, 0), dtype=bool)
+    return names, expressing, missing
+
+
 def gene_poa_inputs(
     adata,
     gene_idx: int,

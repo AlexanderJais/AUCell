@@ -798,6 +798,8 @@ def figure_pnoc_overview(
     point_size: float = 0.3,
     fig2_subsample_idx: Optional[np.ndarray] = None,
     gene_panel_top_n: int = 10,
+    dotplot_gene_names: Optional[List[str]] = None,
+    dotplot_expressing: Optional[np.ndarray] = None,
     violin_top_n: int = 15,
     violin_min_cluster_cells: int = 20,
     violin_allowed_clusters: Optional[Iterable[str]] = None,
@@ -805,11 +807,14 @@ def figure_pnoc_overview(
     """Five-panel composite, all panels equal-sized:
 
         row 1: gene clusters UMAP        | gene expression UMAP (+ colorbar)
-        row 2: gene expression dot plot  | cell-type UMAP (top AUCell clusters)
+        row 2: gene-expression dot plot  | cell-type UMAP (top AUCell clusters)
         row 3: AUCell-score violins      | (empty)
 
         top-left   Figure 2 left  — top `gene_name` clusters in the region
         top-right  Figure 2 right — `gene_name` expression in the region
+        mid-left   dot plot       — % of each cluster's region cells expressing
+                                     each gene in `dotplot_gene_names` (one
+                                     column per gene; defaults to `gene_name`)
         bottom-left  fig_1a       — cell-type UMAP, top AUCell clusters
         bottom-right fig_1c       — AUCell-score violins for those clusters
 
@@ -884,10 +889,17 @@ def figure_pnoc_overview(
     )
 
     # --- row 2 left: gene-expression dot plot (top-N Pnoc clusters) ---
+    # Default to the single driver gene; if a multi-gene panel was requested
+    # (dotplot_gene_names / dotplot_expressing), draw one column per gene with
+    # `gene_name` kept first so the panel still leads with the driver gene.
     gene_panel_clusters = f2_high[:gene_panel_top_n]
+    if dotplot_gene_names is not None and dotplot_expressing is not None:
+        dot_names, dot_expressing = dotplot_gene_names, dotplot_expressing
+    else:
+        dot_names, dot_expressing = [gene_name], full_expressing
     _draw_gene_cluster_dotplot(
-        ax_gvio, full_expr, full_expressing, full_labels, full_region,
-        gene_panel_clusters, gene_name, shared_cmap,
+        ax_gvio, dot_expressing, dot_names, full_labels, full_region,
+        gene_panel_clusters, shared_cmap,
     )
 
     # --- row 2 right: cell-type UMAP, top AUCell clusters coloured ---
@@ -1103,53 +1115,66 @@ def _draw_aucell_violins(ax, aucell_scores, cell_labels, top_n=15,
     return top_clusters
 
 
-def _draw_gene_cluster_dotplot(ax, expr, expressing, cell_labels, region_mask,
-                               clusters, gene_name, color_map,
+def _draw_gene_cluster_dotplot(ax, expressing, gene_names, cell_labels,
+                               region_mask, clusters, color_map,
                                size_scale=320.0, size_floor=10.0):
-    """Single-gene dot plot for the given *clusters* (region cells only), drawn
-    onto *ax*: one row per cluster, dot SIZE = fraction of cells expressing the
-    gene (raw count > 0), dot COLOUR = the cluster's colour from *color_map*
-    (the shared composite palette). The standard sparse-gene summary — robust to
-    the zero-inflation that makes violins of a sparse gene uninformative.
+    """Multi-gene dot plot for the given *clusters* (region cells only), drawn
+    onto *ax*: one row per cluster, one column per gene. Dot SIZE = fraction of
+    the cluster's region cells expressing that gene (raw count > 0); dot COLOUR =
+    the cluster's colour from *color_map* (the shared composite palette), so a
+    row keeps the same colour across every gene column and stays visually linked
+    to the UMAP / violin panels. The standard sparse-gene summary — robust to the
+    zero-inflation that makes violins of a sparse gene uninformative.
 
+    *expressing* is a bool array of shape ``(n_cells,)`` (single gene) or
+    ``(n_cells, n_genes)``; *gene_names* labels the columns (length must match).
     Adds a size legend (% expressing) just to the right of the panel. Clusters
     keep the order supplied (highest first at the top)."""
     region_mask = np.asarray(region_mask, dtype=bool)
     cell_labels = np.asarray(cell_labels)
     expressing = np.asarray(expressing, dtype=bool)
+    if expressing.ndim == 1:
+        expressing = expressing[:, None]
+    n_genes = expressing.shape[1]
+    gene_names = list(gene_names)
 
-    fracs, used = [], []
+    used, frac_rows = [], []
     for cl in clusters:
         m = region_mask & (cell_labels == cl)
         n = int(m.sum())
         if n < 1:
             continue
-        fracs.append(int((m & expressing).sum()) / n)
+        frac_rows.append([int((m & expressing[:, g]).sum()) / n
+                          for g in range(n_genes)])
         used.append(cl)
     if not used:
         ax.text(0.5, 0.5, "No data available", ha="center", va="center",
                 transform=ax.transAxes)
         return None
 
-    y = list(range(len(used)))
-    sizes = [f * size_scale + size_floor for f in fracs]
-    colors = [color_map.get(cl, "#888888") for cl in used]
-    ax.scatter([0] * len(used), y, s=sizes, c=colors,
-               edgecolors="grey", linewidths=0.3)
-    ax.set_yticks(y)
+    xs, ys, sizes, colors = [], [], [], []
+    for yi, (cl, fracs) in enumerate(zip(used, frac_rows)):
+        col = color_map.get(cl, "#888888")
+        for gx in range(n_genes):
+            xs.append(gx)
+            ys.append(yi)
+            sizes.append(fracs[gx] * size_scale + size_floor)
+            colors.append(col)
+    sc = ax.scatter(xs, ys, s=sizes, c=colors, edgecolors="grey", linewidths=0.3)
+    ax.set_yticks(range(len(used)))
     ax.set_yticklabels(used, fontsize=6)
-    ax.set_xticks([0])
-    ax.set_xticklabels([gene_name], fontsize=6)
-    ax.set_xlim(-1, 1)
+    ax.set_xticks(range(n_genes))
+    ax.set_xticklabels(gene_names, fontsize=6, rotation=45, ha="right")
+    ax.set_xlim(-0.5, n_genes - 0.5)
     ax.invert_yaxis()
-    for side in ("top", "right", "bottom"):
+    for side in ("top", "right"):
         ax.spines[side].set_visible(False)
 
     for f in (0.05, 0.15, 0.25):
         ax.scatter([], [], s=f * size_scale + size_floor, c="lightgrey",
                    edgecolors="grey", linewidths=0.3, label=f"{int(f * 100)}%")
     ax.legend(loc="center left", bbox_to_anchor=(1.05, 0.5), fontsize=5,
-              frameon=False, title=f"% {gene_name}+", title_fontsize=5,
+              frameon=False, title="% expressing", title_fontsize=5,
               labelspacing=0.9, handletextpad=0.4, borderaxespad=0)
     return sc
 

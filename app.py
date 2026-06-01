@@ -516,6 +516,7 @@ from analysis import (
 from figure2_inputs import (
     resolve_gene_index,
     gene_poa_inputs,
+    gene_expressing_masks,
     region_cell_mask,
 )
 from figures import (
@@ -1787,6 +1788,11 @@ if run_button or st.session_state.analysis_done:
         FIG2_KEYWORDS = ("preoptic",)
         FIG2_REGION_LABEL = "preoptic"
         FIG2_MIN_CELLS = 20
+        # Genes shown as columns in the composite dot plot (Pnoc kept first so
+        # the panel leads with the driver gene).
+        FIG2_DOTPLOT_GENES = [
+            FIG2_GENE, "Slc17a6", "Adcyap1", "Bdnf", "Sntg2", "Lepr",
+        ]
         st.subheader(f"Figure 2: {FIG2_GENE} expression across the preoptic area")
         _fig2_top_n = st.number_input(
             "Max POA Pnoc-expressing clusters to highlight",
@@ -1812,6 +1818,15 @@ if run_button or st.session_state.analysis_done:
                     min_cells=FIG2_MIN_CELLS, top_n=int(_fig2_top_n),
                 )
             )
+            # Per-gene expressing masks for the composite dot plot columns.
+            _dot_names, _dot_expressing, _dot_missing = gene_expressing_masks(
+                adata, FIG2_DOTPLOT_GENES,
+            )
+            if _dot_missing:
+                st.caption(
+                    "Dot plot: genes not found in the atlas and skipped — "
+                    + ", ".join(_dot_missing)
+                )
             # Subsample the backdrop to the same density as fig_1a (same
             # umap_subsample count and seed=42), so the two figures match.
             _fig2_sub = None
@@ -2009,10 +2024,13 @@ if run_button or st.session_state.analysis_done:
                 "Composite: Pnoc preoptic UMAPs + cell-type UMAP + AUCell violins"
             )
             st.markdown(
-                "Four-panel overview. **Top:** the two Figure 2 panels (top "
-                "*Pnoc* preoptic clusters and *Pnoc* expression). **Bottom:** "
+                "Five-panel overview. **Top:** the two Figure 2 panels (top "
+                "*Pnoc* preoptic clusters and *Pnoc* expression). **Middle-left:** "
+                "a dot plot of the fraction of each cluster's preoptic cells "
+                "expressing " + ", ".join(f"*{g}*" for g in _dot_names) + " "
+                "(dot size = % expressing, colour = cluster). **Bottom:** "
                 "`fig_1a_celltype_umap` (top-15 AUCell clusters) and "
-                "`fig_1c_aucell_violins`. All four panels share the same "
+                "`fig_1c_aucell_violins`. All panels share the same "
                 "rendering and equal dimensions."
             )
             fig_overview = figure_pnoc_overview(
@@ -2023,6 +2041,8 @@ if run_button or st.session_state.analysis_done:
                 fig2_expressing_mask=_fig2_expressing,
                 fig2_highlight=_fig2_highlight,
                 fig2_subsample_idx=_fig2_sub,
+                dotplot_gene_names=_dot_names,
+                dotplot_expressing=_dot_expressing,
                 ct_highlight=_top15_aucell_clusters_ct,
                 aucell_scores=aucell_scores,
                 view_labels=cell_labels,
