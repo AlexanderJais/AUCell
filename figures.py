@@ -1163,7 +1163,7 @@ def _draw_aucell_violins(ax, aucell_scores, cell_labels, top_n=15,
 def _draw_gene_cluster_dotplot(ax, expressing, gene_names, cell_labels,
                                region_mask, clusters, color_map,
                                size_scale=320.0, size_floor=10.0,
-                               min_frac=0.02):
+                               min_frac=0.01):
     """Multi-gene dot plot for the given *clusters* (region cells only), drawn
     onto *ax*: one row per cluster, one column per gene. Dot SIZE = fraction of
     the cluster's region cells expressing that gene (raw count > 0); dot COLOUR =
@@ -1175,7 +1175,7 @@ def _draw_gene_cluster_dotplot(ax, expressing, gene_names, cell_labels,
     *expressing* is a bool array of shape ``(n_cells,)`` (single gene) or
     ``(n_cells, n_genes)``; *gene_names* labels the columns (length must match).
     A (cluster, gene) cell expressed in fewer than *min_frac* of the cluster's
-    cells (default 2%) draws **no dot** at all, so effectively-unexpressed genes
+    cells (default 1%) draws **no dot** at all, so effectively-unexpressed genes
     read as blank rather than as a small dot. Adds a size legend (% expressing)
     just to the right of the panel. Clusters keep the order supplied (highest
     first at the top)."""
