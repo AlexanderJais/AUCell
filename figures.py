@@ -1162,7 +1162,8 @@ def _draw_aucell_violins(ax, aucell_scores, cell_labels, top_n=15,
 
 def _draw_gene_cluster_dotplot(ax, expressing, gene_names, cell_labels,
                                region_mask, clusters, color_map,
-                               size_scale=320.0, size_floor=10.0):
+                               size_scale=320.0, size_floor=10.0,
+                               min_frac=0.02):
     """Multi-gene dot plot for the given *clusters* (region cells only), drawn
     onto *ax*: one row per cluster, one column per gene. Dot SIZE = fraction of
     the cluster's region cells expressing that gene (raw count > 0); dot COLOUR =
@@ -1173,10 +1174,11 @@ def _draw_gene_cluster_dotplot(ax, expressing, gene_names, cell_labels,
 
     *expressing* is a bool array of shape ``(n_cells,)`` (single gene) or
     ``(n_cells, n_genes)``; *gene_names* labels the columns (length must match).
-    A (cluster, gene) cell with **zero** expressing cells draws **no dot** at
-    all, so unexpressed genes read as blank rather than as a small dot. Adds a
-    size legend (% expressing) just to the right of the panel. Clusters keep the
-    order supplied (highest first at the top)."""
+    A (cluster, gene) cell expressed in fewer than *min_frac* of the cluster's
+    cells (default 2%) draws **no dot** at all, so effectively-unexpressed genes
+    read as blank rather than as a small dot. Adds a size legend (% expressing)
+    just to the right of the panel. Clusters keep the order supplied (highest
+    first at the top)."""
     region_mask = np.asarray(region_mask, dtype=bool)
     cell_labels = np.asarray(cell_labels)
     expressing = np.asarray(expressing, dtype=bool)
@@ -1203,11 +1205,12 @@ def _draw_gene_cluster_dotplot(ax, expressing, gene_names, cell_labels,
     for yi, (cl, fracs) in enumerate(zip(used, frac_rows)):
         col = color_map.get(cl, "#888888")
         for gx in range(n_genes):
-            # No dot where the gene is unexpressed — the additive size floor
-            # (which keeps genuinely low-but-present fractions visible) would
-            # otherwise give a 0%-expressing gene the same small dot as a low
-            # one, hiding the difference.
-            if fracs[gx] <= 0:
+            # No dot where the gene is expressed in fewer than `min_frac` of
+            # the cluster's cells — treat that as effectively unexpressed. The
+            # additive size floor (which keeps genuinely low-but-present
+            # fractions visible) would otherwise give such a gene the same
+            # small dot as a more highly expressed one, hiding the difference.
+            if fracs[gx] < min_frac:
                 continue
             xs.append(gx)
             ys.append(yi)
