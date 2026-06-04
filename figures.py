@@ -1151,7 +1151,6 @@ def _draw_gene_cluster_dotplot(ax, expr, expressing, cell_labels, region_mask,
     ax.legend(loc="center left", bbox_to_anchor=(1.05, 0.5), fontsize=5,
               frameon=False, title=f"% {gene_name}+", title_fontsize=5,
               labelspacing=0.9, handletextpad=0.4, borderaxespad=0)
-    return sc
 
 
 def figure_aucell_zscore_violins(
